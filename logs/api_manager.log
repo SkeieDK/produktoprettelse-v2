@@ -1,0 +1,15 @@
+2025-10-11 12:36:04,287 INFO API_KEY fundet
+2025-10-11 12:36:04,287 INFO Bruger cached kategori data (0.2 timer gammel)
+2025-10-11 12:36:04,315 INFO Bruger cached produkt data (0.2 timer gammel)
+2025-10-11 12:38:53,935 INFO API_KEY fundet
+2025-10-11 12:38:53,936 INFO Bruger cached kategori data (0.2 timer gammel)
+2025-10-11 12:38:53,962 INFO Bruger cached produkt data (0.2 timer gammel)
+2025-10-11 12:38:54,008 INFO Henter produkter fra API...
+2025-10-11 12:39:21,747 INFO Hentet 3644 produkter i alt
+2025-10-11 12:43:14,972 INFO API_KEY fundet
+2025-10-11 12:43:14,973 INFO Bruger cached kategori data (0.3 timer gammel)
+2025-10-11 12:43:15,000 INFO Henter produkter fra API...
+2025-10-11 12:43:23,692 INFO Hentet 3644 produkter i alt
+2025-10-11 12:44:18,559 INFO API_KEY fundet
+2025-10-11 12:44:18,559 INFO Bruger cached kategori data (0.3 timer gammel)
+2025-10-11 12:44:18,586 INFO Bruger cached produkt data (0.0 timer gammel)

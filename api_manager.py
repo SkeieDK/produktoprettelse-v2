@@ -6,26 +6,46 @@ import requests
 import os
 import json
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
+import logging
+from tqdm import tqdm
 
 class APIManager:
     """Centraliseret API manager for eksterne data sources"""
-    
     def __init__(self):
         self.api_key = os.getenv('API_KEY')
         self.api_username = os.getenv('API_USERNAME', '')  # Optional username
-        
         if not self.api_key:
             raise ValueError("API_KEY miljøvariabel ikke fundet!")
-        
         # Base URLs
         self.category_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/categories"
         self.product_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products"
-        
         # Cache directory
         self.cache_dir = Path(__file__).parent / "cache"
         self.cache_dir.mkdir(exist_ok=True)
+        # Log directory
+        self.log_dir = Path(__file__).parent / "logs"
+        self.log_dir.mkdir(exist_ok=True)
+        log_file_path = self.log_dir / "api_manager.log"
+        # Setup logging
+        self.logger = logging.getLogger("APIManager")
+        self.logger.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+        # Stream handler (console)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        # File handler (log file)
+        file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        # Avoid duplicate handlers
+        if not self.logger.hasHandlers():
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
+        else:
+            self.logger.handlers.clear()
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
     
     def _create_auth_string(self) -> str:
         """Opret korrekt Base64 encoded auth string"""
@@ -37,7 +57,7 @@ class APIManager:
         # Base64 encode
         return base64.b64encode(auth_text.encode('utf-8')).decode('utf-8')
         
-    def _make_api_request(self, url: str, params: Dict = None, timeout: int = 30) -> Dict:
+    def _make_api_request(self, url: str, params: Optional[Dict[str, Any]] = None, timeout: int = 30) -> Dict:
         """Generisk API request med error handling"""
         # Opret korrekt Basic Auth header
         auth_string = self._create_auth_string()
@@ -59,58 +79,42 @@ class APIManager:
     def get_all_categories(self, use_cache: bool = True, cache_hours: int = 24) -> List[Dict]:
         """
         Hent alle produktkategorier fra API med paginering
-        
-        Args:
-            use_cache: Brug cached data hvis tilgængelig
-            cache_hours: Timer før cache udløber
         """
         cache_file = self.cache_dir / "categories_cache.json"
-        
         # Tjek cache først
         if use_cache and cache_file.exists():
             cache_age = time.time() - cache_file.stat().st_mtime
             if cache_age < (cache_hours * 3600):
-                print(f"📋 Bruger cached kategori data ({cache_age/3600:.1f} timer gammel)")
+                self.logger.info(f"Bruger cached kategori data ({cache_age/3600:.1f} timer gammel)")
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-        
-        print("🌐 Henter produktkategorier fra API...")
-        
+        self.logger.info("Henter produktkategorier fra API...")
         all_categories = []
         offset = 0
         limit = 100  # API max er 100
-        
-        while True:
-            params = {
-                'limit': limit,
-                'offset': offset
-            }
-            
-            print(f"   Henter batch: offset={offset}, limit={limit}")
-            response = self._make_api_request(self.category_api_url, params)
-            
-            items = response.get('items', [])
-            if not items:
-                break
-                
-            all_categories.extend(items)
-            
-            # Tjek om der er flere
-            has_more = response.get('hasMore', False)
-            if not has_more:
-                break
-                
-            offset += limit
-            
-            # Lille pause for at være venlig mod API'et
-            time.sleep(0.1)
-        
-        print(f"✅ Hentet {len(all_categories)} kategorier i alt")
-        
+        with tqdm(desc="Henter kategorier", unit="batch") as pbar:
+            while True:
+                params: Dict[str, Union[int, str]] = {
+                    'limit': limit,
+                    'offset': offset
+                }
+                self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
+                response = self._make_api_request(self.category_api_url, params)
+                items = response.get('items', [])
+                if not items:
+                    break
+                all_categories.extend(items)
+                pbar.update(1)
+                # Tjek om der er flere
+                has_more = response.get('hasMore', False)
+                if not has_more:
+                    break
+                offset += limit
+                time.sleep(0.1)
+        self.logger.info(f"Hentet {len(all_categories)} kategorier i alt")
         # Gem til cache
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(all_categories, f, ensure_ascii=False, indent=2)
-        
         return all_categories
     
     def filter_categories(self, categories: List[Dict]) -> List[Dict]:
@@ -172,65 +176,45 @@ class APIManager:
         
         return processed_categories
     
-    def get_all_products(self, include_categories: bool = True, use_cache: bool = True, cache_hours: int = 24) -> List[Dict]:
+    def get_all_products(self, use_cache: bool = True, cache_hours: int = 24) -> List[Dict]:
         """
         Hent alle produkter fra API med paginering
-        
-        Args:
-            include_categories: Inkluder kategori information
-            use_cache: Brug cached data hvis tilgængelig
-            cache_hours: Timer før cache udløber
         """
-        cache_file = self.cache_dir / f"products_cache_{'with_cats' if include_categories else 'no_cats'}.json"
-        
+        cache_file = self.cache_dir / "products_cache.json"
         # Tjek cache først
         if use_cache and cache_file.exists():
             cache_age = time.time() - cache_file.stat().st_mtime
             if cache_age < (cache_hours * 3600):
-                print(f"📋 Bruger cached produkt data ({cache_age/3600:.1f} timer gammel)")
+                self.logger.info(f"Bruger cached produkt data ({cache_age/3600:.1f} timer gammel)")
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-        
-        print("🌐 Henter produkter fra API...")
-        
+        self.logger.info("Henter produkter fra API...")
         all_products = []
         offset = 0
         limit = 100  # API max er 100
-        
-        while True:
-            params = {
-                'limit': limit,
-                'offset': offset
-            }
-            
-            if include_categories:
-                params['include'] = 'categories'
-            
-            print(f"   Henter batch: offset={offset}, limit={limit}")
-            response = self._make_api_request(self.product_api_url, params)
-            
-            items = response.get('items', [])
-            if not items:
-                break
-                
-            all_products.extend(items)
-            
-            # Tjek om der er flere
-            has_more = response.get('hasMore', False)
-            if not has_more:
-                break
-                
-            offset += limit
-            
-            # Lille pause for at være venlig mod API'et
-            time.sleep(0.1)
-        
-        print(f"✅ Hentet {len(all_products)} produkter i alt")
-        
+        with tqdm(desc="Henter produkter", unit="batch") as pbar:
+            while True:
+                params: Dict[str, Union[int, str]] = {
+                    'limit': limit,
+                    'offset': offset
+                }
+                self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
+                response = self._make_api_request(self.product_api_url, params)
+                items = response.get('items', [])
+                if not items:
+                    break
+                all_products.extend(items)
+                pbar.update(1)
+                # Tjek om der er flere
+                has_more = response.get('hasMore', False)
+                if not has_more:
+                    break
+                offset += limit
+                time.sleep(0.1)
+        self.logger.info(f"Hentet {len(all_products)} produkter i alt")
         # Gem til cache
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(all_products, f, ensure_ascii=False, indent=2)
-        
         return all_products
     
     def process_product_data(self, products: List[Dict]) -> List[Dict]:
@@ -314,26 +298,18 @@ class APIManager:
             return texts[0].get('name', '')
         return category.get('number', '')
     
-    def get_processed_products(self, include_categories: bool = True, use_cache: bool = True) -> List[Dict]:
+    def get_processed_products(self, use_cache: bool = True) -> List[Dict]:
         """
         Hent og process alle produkter med fuld API logik
-        
-        Args:
-            include_categories: Inkluder kategori information
-            use_cache: Brug cached data
-            
         Returns:
             List af processede produkter klar til brug
         """
         # Hent alle produkter
-        all_products = self.get_all_products(include_categories, use_cache)
-        
+        all_products = self.get_all_products(use_cache)
         print(f"📊 Processerer {len(all_products)} produkter...")
-        
         # Process produkter
         processed_products = self.process_product_data(all_products)
         print(f"✅ {len(processed_products)} produkter processeret")
-        
         return processed_products
     
     def _get_category_name(self, category: Dict) -> str:
@@ -343,9 +319,9 @@ class APIManager:
             return texts[0].get('name', '')
         return category.get('number', '')
     
-    def _build_category_hierarchy(self, category: Dict, cat_lookup: Dict) -> Dict:
+    def _build_category_hierarchy(self, category: Dict, cat_lookup: Dict) -> Dict[str, Any]:
         """Build kategori hierarki op til 3 niveauer"""
-        hierarchy = {
+        hierarchy: Dict[str, Any] = {
             'parent_cat': None,
             'overkategori_1': None,
             'parent_cat_1': None,
@@ -353,18 +329,15 @@ class APIManager:
             'parent_cat_2': None,
             'hovedkategori': None
         }
-        
         parent_ids = category.get('parentIds', [])
         if not parent_ids:
             return hierarchy
-        
         # Niveau 1 parent
         parent_1_id = str(parent_ids[0])
         if parent_1_id in cat_lookup:
             parent_1 = cat_lookup[parent_1_id]
             hierarchy['parent_cat'] = parent_1_id
             hierarchy['overkategori_1'] = self._get_category_name(parent_1)
-            
             # Niveau 2 parent
             parent_1_parents = parent_1.get('parentIds', [])
             if parent_1_parents:
@@ -373,7 +346,6 @@ class APIManager:
                     parent_2 = cat_lookup[parent_2_id]
                     hierarchy['parent_cat_1'] = parent_2_id
                     hierarchy['overkategori_2'] = self._get_category_name(parent_2)
-                    
                     # Niveau 3 parent (hovedkategori)
                     parent_2_parents = parent_2.get('parentIds', [])
                     if parent_2_parents:
@@ -382,7 +354,6 @@ class APIManager:
                             parent_3 = cat_lookup[parent_3_id]
                             hierarchy['parent_cat_2'] = parent_3_id
                             hierarchy['hovedkategori'] = self._get_category_name(parent_3)
-        
         return hierarchy
     
     def _calculate_category_level(self, processed_cat: Dict) -> int:
@@ -474,13 +445,10 @@ class APIManager:
     def get_cache_info(self) -> Dict[str, Any]:
         """Få information om cache status"""
         cache_info = {}
-        
         cache_files = [
             "categories_cache.json",
-            "products_cache_with_cats.json", 
-            "products_cache_no_cats.json"
+            "products_cache.json"
         ]
-        
         for filename in cache_files:
             cache_file = self.cache_dir / filename
             if cache_file.exists():
@@ -492,7 +460,6 @@ class APIManager:
                 }
             else:
                 cache_info[filename] = {'exists': False}
-        
         return cache_info
 
 # Global instance
@@ -508,15 +475,14 @@ def refresh_categories():
     api_manager.clear_cache("categories")
     return api_manager.get_processed_categories(use_cache=False)
 
-def get_products(include_categories: bool = True, use_cache: bool = True):
+def get_products(use_cache: bool = True):
     """Hent processede produkter"""
-    return api_manager.get_processed_products(include_categories, use_cache)
+    return api_manager.get_processed_products(use_cache)
 
-def refresh_products(include_categories: bool = True):
+def refresh_products():
     """Genindlæs produkter fra API"""
-    cache_type = "products" if include_categories else "products_no_cats"
-    api_manager.clear_cache(cache_type)
-    return api_manager.get_processed_products(include_categories, use_cache=False)
+    api_manager.clear_cache("products")
+    return api_manager.get_processed_products(use_cache=False)
 
 def get_cache_status():
     """Få cache status"""
@@ -526,45 +492,36 @@ if __name__ == "__main__":
     # Test script
     try:
         print("=== API Manager Test ===")
-        
         # Test API key
         if api_manager.api_key:
-            print("✅ API_KEY fundet")
+            api_manager.logger.info("API_KEY fundet")
         else:
-            print("❌ API_KEY ikke fundet")
+            api_manager.logger.error("API_KEY ikke fundet")
             exit(1)
-        
         # Test kategori hentning
         categories = api_manager.get_processed_categories()
-        
         if categories:
             print(f"\n📊 Eksempel kategori data:")
             example = categories[0]
             for key, value in example.items():
                 print(f"  {key}: {value}")
-                
             print(f"\n📈 Kategori niveau fordeling:")
             levels = {}
             for cat in categories:
                 level = cat['kategori_niveau']
                 levels[level] = levels.get(level, 0) + 1
-            
             for level, count in sorted(levels.items()):
                 print(f"  Niveau {level}: {count} kategorier")
-        
-        # Test produkt hentning (kun få stykker for test)
+        # Test produkt hentning
         print(f"\n=== Test Produkter ===")
-        products = api_manager.get_processed_products(include_categories=False, use_cache=True)
-        
+        products = api_manager.get_processed_products(use_cache=True)
         if products:
             print(f"✅ {len(products)} produkter hentet")
-            
             # Vis eksempel produkt
             example_product = products[0]
             print(f"\n📦 Eksempel produkt data:")
             for key, value in list(example_product.items())[:10]:  # Vis kun første 10 felter
                 print(f"  {key}: {value}")
-        
         # Vis cache status
         print(f"\n=== Cache Status ===")
         cache_info = api_manager.get_cache_info()
@@ -573,6 +530,5 @@ if __name__ == "__main__":
                 print(f"✅ {filename}: {info['age_hours']:.1f}t gammel, {info['size_mb']:.1f}MB")
             else:
                 print(f"❌ {filename}: Ikke cached")
-        
     except Exception as e:
-        print(f"❌ Fejl: {e}")
+        api_manager.logger.error(f"Fejl: {e}")
