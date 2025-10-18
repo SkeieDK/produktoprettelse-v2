@@ -1,0 +1,36 @@
+[
+  {
+    "product_number": "E146220 - Deaktiveret",
+    "product_url": "https://dk.duni.com/en/Napkins/Pre-folded-napkins/Coloured-pre-folded-napkins/Bio-Dunisoft-18-Book-Folded/p/202933",
+    "supplier_info": "Who says sustainable can't be colourful? Featuring a pioneering OC-BioBinder™, our Bio Dunisoft® Napkin is made from fossil-free, fully renewable materials - without compromising on softness or a rich colour palette to suit any setting. Pleasant to the touch, generously-sized and with good absorbency, Bio Dunisoft® Unicolour Napkins provide a treat for all the senses while lasting throughout every premium, yet informal dining occasion.• Quickly facilitate setting for multiple servings in a limited timeframe• Generously sized and good absorbency• Delightfully soft, for colourful moments• Durable• Made from FSC®-certified fibres",
+    "images": [
+      {
+        "url": "http://127.0.0.1:8000/static/cache/public_images/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal_2.jpg",
+        "thumbnail": "http://127.0.0.1:8000/static/cache/public_images/thumbnails/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal_2.jpg"
+      },
+      {
+        "url": "http://127.0.0.1:8000/static/cache/public_images/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal_3.jpg",
+        "thumbnail": "http://127.0.0.1:8000/static/cache/public_images/thumbnails/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal_3.jpg"
+      },
+      {
+        "url": "http://127.0.0.1:8000/static/cache/public_images/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal.jpg",
+        "thumbnail": "http://127.0.0.1:8000/static/cache/public_images/thumbnails/e146220_deaktiveret_e146220_serviet_bio_dunisoft_40x40cm_ocean_teal.jpg"
+      }
+    ]
+  },
+  {
+    "product_number": "E146230 - Deaktiveret",
+    "product_url": "https://dk.duni.com/en/Table-covers/Table-runners/Patterned-table-runners/Dunicel-T%C3%AAte-%C3%A0-t%C3%AAte/p/200871",
+    "supplier_info": "Our Dunicel® Tête-à-tête is a convenient choice if you want to highlight the season or culinary concept of a premium, but laid-back dining occasion without covering the whole table. Subtly connecting guests, Dunicel® Tête-à-têtes are soft to the touch, water-repellent, and come in a wide range of beautiful designs, helping create colourful settings strong enough to outlast every occasion.• Pre-perforated for easy handling• Strong and water-repellent, to outlast every meal• Colourful designs to suit the concept or season• Made from FSC®-certified fibres",
+    "images": [
+      {
+        "url": "http://127.0.0.1:8000/static/cache/public_images/e146230_deaktiveret_e146230_kuvertloeber_dunicel_tete_a_tete_0_4x24_m_fsc_star_shine_red_2.jpg",
+        "thumbnail": "http://127.0.0.1:8000/static/cache/public_images/thumbnails/e146230_deaktiveret_e146230_kuvertloeber_dunicel_tete_a_tete_0_4x24_m_fsc_star_shine_red_2.jpg"
+      },
+      {
+        "url": "http://127.0.0.1:8000/static/cache/public_images/e146230_deaktiveret_e146230_kuvertloeber_dunicel_tete_a_tete_0_4x24_m_fsc_star_shine_red.jpg",
+        "thumbnail": "http://127.0.0.1:8000/static/cache/public_images/thumbnails/e146230_deaktiveret_e146230_kuvertloeber_dunicel_tete_a_tete_0_4x24_m_fsc_star_shine_red.jpg"
+      }
+    ]
+  }
+]

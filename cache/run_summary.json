@@ -1,0 +1,42 @@
+[
+    {
+        "product_number": "E146220 - Deaktiveret",
+        "status": "success",
+        "images_found": 3,
+        "image_sizes": [
+            [
+                1200,
+                800
+            ],
+            [
+                1200,
+                800
+            ],
+            [
+                1200,
+                1200
+            ]
+        ],
+        "supplier_info_source": "description",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146230 - Deaktiveret",
+        "status": "success",
+        "images_found": 2,
+        "image_sizes": [
+            [
+                1200,
+                1200
+            ],
+            [
+                1200,
+                1200
+            ]
+        ],
+        "supplier_info_source": "description",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    }
+]

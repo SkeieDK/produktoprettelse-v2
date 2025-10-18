@@ -18,4 +18,18 @@ python-dotenv
 beautifulsoup4
 lxml
 
+# Backend API
+fastapi
+uvicorn[standard]
+
+# PDF extraction
+PyMuPDF
+
+# Selenium for browser automation
+selenium
+webdriver-manager
+
+# Progress bars
+tqdm
+
 # If you use re, json, os, sys, pathlib, hashlib, asyncio, they are all standard library and do not need to be listed.
