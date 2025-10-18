@@ -1,0 +1,15 @@
+{
+  "pluspack.com": {
+    "domain": "pluspack.com",
+    "selectors": {},
+    "image_strategy": {
+      "type": "simple",
+      "image_selector": "img.product-image, .product-images img"
+    },
+    "pdf_strategy": {},
+    "success_count": 1,
+    "fail_count": 0,
+    "last_used": "2025-10-11T20:05:58.379424",
+    "created_at": "2025-10-11T20:05:58.379424"
+  }
+}

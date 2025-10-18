@@ -1,5 +1,23 @@
-.env
-*.pyc
+# Python venv and cache
+venv/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code
 .vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*

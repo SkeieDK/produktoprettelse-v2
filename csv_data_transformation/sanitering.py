@@ -1,4 +1,7 @@
 import pandas as pd
+import json
+import os
+import numpy as np
 from typing import List, Dict
 
 class CSVSanitering:
@@ -100,6 +103,51 @@ class CSVSanitering:
         self.df = self.df.rename(columns=rename_map)
         return self.df
 
+    def add_img_name(self):
+        """Generate IMG_NAME from PROD_NUM_old and ORIGINAL_PROD_NAME following Excel formula logic."""
+        def generate_img_name(prod_num, prod_name):
+            if pd.isna(prod_num) or pd.isna(prod_name):
+                return ""
+            
+            # Concatenate
+            img_name = f"{prod_num}-{prod_name}"
+            
+            # Lowercase
+            img_name = img_name.lower()
+            
+            # Replace Danish characters
+            img_name = img_name.replace("å", "aa")
+            img_name = img_name.replace("ø", "oe")
+            img_name = img_name.replace("Ø", "oe")
+            img_name = img_name.replace("æ", "ae")
+            
+            # Replace special characters
+            img_name = img_name.replace(" ", "-")
+            img_name = img_name.replace("/", "-")
+            img_name = img_name.replace("%", "procent")
+            img_name = img_name.replace("+", "plus")
+            
+            # Remove any remaining special characters that might cause issues
+            img_name = img_name.replace("(", "")
+            img_name = img_name.replace(")", "")
+            img_name = img_name.replace(".", "-")
+            img_name = img_name.replace(",", "-")
+            
+            # Clean up multiple hyphens
+            while "--" in img_name:
+                img_name = img_name.replace("--", "-")
+            
+            # Remove leading/trailing hyphens
+            img_name = img_name.strip("-")
+            
+            return img_name
+        
+        self.df["IMG_NAME"] = self.df.apply(
+            lambda row: generate_img_name(row.get("PROD_NUM_old"), row.get("ORIGINAL_PROD_NAME")),
+            axis=1
+        )
+        return self.df
+
     def add_prod_num(self, max_prod_num: str):
         """
         Generer unikt PROD_NUM for hver række, startende fra højeste eksisterende PROD_NUM og +10 for hver.
@@ -150,7 +198,38 @@ class CSVSanitering:
         self.rename_columns()
         max_prod_num = self.get_highest_prod_num_from_cache(cache_path)
         self.add_prod_num(max_prod_num)
+        self.add_img_name()
         return self.df
+
+    def to_json(self, output_path: str = None) -> str:
+        """Export processed DataFrame to JSON file. No manipulation, just the data as-is."""
+        import numpy as np
+        if output_path is None:
+            output_path = os.path.join(os.path.dirname(__file__), '..', 'cache', 'processed_products.json')
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Convert DataFrame to list of dictionaries
+        records = self.df.to_dict(orient='records')
+        
+        # Replace NaN and inf with None
+        def replace_nan(obj):
+            if isinstance(obj, dict):
+                return {k: replace_nan(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [replace_nan(v) for v in obj]
+            elif isinstance(obj, float):
+                if np.isnan(obj) or np.isinf(obj):
+                    return None
+            return obj
+        
+        records = replace_nan(records)
+        
+        # Write to JSON
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(records, f, indent=2, ensure_ascii=False)
+        
+        return output_path
 
 if __name__ == "__main__":
     # Eksempel på brug
@@ -160,6 +239,9 @@ if __name__ == "__main__":
         df = pd.read_csv(csv_path)
         sanitering = CSVSanitering(df)
         df_trans = sanitering.process()
-        print(df_trans.head())
+        
+        # Output to JSON
+        json_file = sanitering.to_json()
+        print(f"✅ Exported to: {json_file}")
     else:
         print("Angiv sti til CSV-fil som argument.")
