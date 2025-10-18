@@ -1,23 +1,52 @@
 # Python venv and cache
-venv/
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-# VS Code
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# Editor directories and files
 .vscode/
+/.idea/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
 # Logs
 *.log
 
-# Environment
+# Environment files
 .env
 .env.*
+
+# Node / frontend
+node_modules/
+/frontend/node_modules/
+frontend/dist/
+frontend/.env
+package-lock.json
+
+# Build outputs
+dist/
+build/
+
+# Cache and generated artifacts
+cache/
+/cache/
+cache/**/public_images/
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Ignore sensitive local settings
+secrets.json
