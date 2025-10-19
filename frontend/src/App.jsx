@@ -71,84 +71,91 @@ function App() {
 
   return (
     <div className="app-container">
-      <h1 className="title">Produktoprettelse — The Archive</h1>
-      <p className="subtitle">A darker, more epic place where suppliers' secrets are revealed. Click to query the archive.</p>
-
-      <div style={{ marginTop: 28 }}>
-        <button className="run-btn" onClick={runScraper} disabled={loading}>
-          {loading ? "Working..." : "⚔️ Run Scraper ⚔️"}
-        </button>
-      </div>
-
-      <div style={{ marginTop: 12, color: 'rgba(230,230,230,0.8)' }}>{status}</div>
-
-      {results.length === 0 ? (
-        <div className="empty-state">No results yet — summon the Archive.</div>
-      ) : (
-        <div className="results-table-wrap">
-          <table className="results-table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>Product</th>
-                <th>Supplier info</th>
-                <th>Source</th>
-                <th>Images</th>
-                <th>Image sizes</th>
-                <th>Product URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((r, i) => {
-                const runSummary = r.run_summary || null;
-                const images = Array.isArray(r.images) ? r.images : (r.image_url ? [r.image_url] : []);
-                const imgCount = runSummary && typeof runSummary.images_found === 'number' ? runSummary.images_found : images.length;
-                const imageSizes = runSummary && runSummary.image_sizes ? runSummary.image_sizes : [];
-                const supplierSource = runSummary && runSummary.supplier_info_source ? runSummary.supplier_info_source : (r.supplier_info && r.supplier_info.includes('.pdf') ? 'pdf' : 'web');
-                // thumbnail logic
-                let thumb = null;
-                if (images.length > 0) {
-                  const first = images[0];
-                  if (typeof first === 'string') thumb = first;
-                  else if (first && typeof first === 'object') thumb = first.thumbnail || first.url || null;
-                } else if (r.image_url) thumb = r.image_url;
-
-                const supplierInfo = r.supplier_info || r.summary || '';
-
-                return (
-                  <tr key={i} className="results-row">
-                    <td className="td-thumb">
-                      {thumb ? (
-                        <img src={thumb} alt={r.product_number || 'thumb'} className="thumb-sm" onError={(e)=>{e.currentTarget.style.display='none'}} />
-                      ) : (
-                        <div className="thumb-placeholder" />
-                      )}
-                    </td>
-                    <td className="td-product"><div className="product-number">{r.product_number || '—'}</div></td>
-                    <td className="td-supplier">
-                      <SupplierInfoSnippet text={supplierInfo} />
-                    </td>
-                    <td className="td-source">{supplierSource}</td>
-                    <td className="td-images">{imgCount}</td>
-                    <td className="td-sizes">
-                      {imageSizes && imageSizes.length > 0 ? (
-                        imageSizes.map((s, idx) => (
-                          <div key={idx}>{Array.isArray(s) ? `${s[0]}x${s[1]} px` : s}</div>
-                        ))
-                      ) : (
-                        <div style={{opacity:0.7}}>—</div>
-                      )}
-                    </td>
-                    <td className="td-link">
-                      {r.product_url ? <a href={r.product_url} target="_blank" rel="noopener noreferrer">Open</a> : '—'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <header className="site-header">
+        <div className="brand">
+          <div className="logo" aria-hidden />
+          <div>
+            <div className="title">Produktoprettelse</div>
+            <div className="tag">Supplier extraction dashboard</div>
+          </div>
         </div>
-      )}
+
+        <div className="controls">
+          <div className="status-pill">{status || 'Ready'}</div>
+          <button className="btn-ghost" onClick={fetchResults}>Refresh</button>
+          <button className="btn-cta" onClick={runScraper} disabled={loading}>{loading ? 'Working…' : 'Run Scraper'}</button>
+        </div>
+      </header>
+
+      <main className="content">
+        <div className="panel results-table-wrap">
+          {results.length === 0 ? (
+            <div className="empty-state panel" style={{padding:'3rem', textAlign:'center'}}>No results yet — click "Run Scraper" to populate the table.</div>
+          ) : (
+            <table className="results-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Product</th>
+                  <th>Supplier info</th>
+                  <th>Source</th>
+                  <th>Images</th>
+                  <th>Image sizes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((r, i) => {
+                  const runSummary = r.run_summary || null;
+                  const images = Array.isArray(r.images) ? r.images : (r.image_url ? [r.image_url] : []);
+                  const imgCount = runSummary && typeof runSummary.images_found === 'number' ? runSummary.images_found : images.length;
+                  const imageSizes = runSummary && runSummary.image_sizes ? runSummary.image_sizes : [];
+                  const supplierSource = runSummary && runSummary.supplier_info_source ? runSummary.supplier_info_source : (r.supplier_info && r.supplier_info.includes('.pdf') ? 'pdf' : 'web');
+
+                  let thumb = null;
+                  if (images.length > 0) {
+                    const first = images[0];
+                    if (typeof first === 'string') thumb = first;
+                    else if (first && typeof first === 'object') thumb = first.thumbnail || first.url || null;
+                  } else if (r.image_url) thumb = r.image_url;
+
+                  const supplierInfo = r.supplier_info || r.summary || '';
+
+                  return (
+                    <tr key={i} className="results-row">
+                      <td className="td-thumb">
+                        {thumb ? (
+                          <img src={thumb} alt={r.product_number || 'thumb'} className="thumb-sm" onError={(e)=>{e.currentTarget.style.display='none'}} />
+                        ) : (
+                          <div className="thumb-placeholder" />
+                        )}
+                      </td>
+                      <td className="td-product"><div className="product-number">{r.product_number || '—'}</div></td>
+                      <td className="td-supplier">
+                        <SupplierInfoSnippet text={supplierInfo} />
+                      </td>
+                      <td className="td-source">{supplierSource}</td>
+                      <td className="td-images">{imgCount}</td>
+                      <td className="td-sizes">
+                        {imageSizes && imageSizes.length > 0 ? (
+                          imageSizes.map((s, idx) => (
+                            <div key={idx}>{Array.isArray(s) ? `${s[0]}x${s[1]} px` : s}</div>
+                          ))
+                        ) : (
+                          <div style={{opacity:0.7}}>—</div>
+                        )}
+                      </td>
+                      <td className="td-link">
+                        {r.product_url ? <a href={r.product_url} target="_blank" rel="noopener noreferrer">Open</a> : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
