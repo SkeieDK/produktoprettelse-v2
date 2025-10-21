@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-from utils.pdf_extractor import extract_text_from_pdf
+from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
 
 
 def handle_cookie_consent(driver, screenshot_dir="."):
@@ -71,7 +71,7 @@ def scrape(driver, product_number, img_name, download_folder, original_folder, i
         WebDriverWait(driver, 10).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
         )
-        print(f"🔗 Product page found")
+        logging.info("🔗 Product page found")
 
         # Parse page
         soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -87,7 +87,7 @@ def scrape(driver, product_number, img_name, download_folder, original_folder, i
                 result["image_urls"].append(href)
 
         if result["image_urls"]:
-            print(f"📥 Found {len(result['image_urls'])} image URLs")
+            logging.info(f"📥 Found {len(result['image_urls'])} image URLs")
 
         # Find PDF URL (don't download, just collect)
         datasheet_pdf = None
@@ -106,7 +106,7 @@ def scrape(driver, product_number, img_name, download_folder, original_folder, i
             result["pdf_url"] = datasheet_pdf
             if not result["pdf_url"].startswith('http'):
                 result["pdf_url"] = f"https://www.vikan.com{result['pdf_url']}"
-            print(f"📄 PDF URL found")
+            logging.info("📄 PDF URL found")
         else:
             # Fallback PDF
             pdf_link = soup.find('a', href=lambda x: x and str(x).endswith('.pdf'))
@@ -114,13 +114,12 @@ def scrape(driver, product_number, img_name, download_folder, original_folder, i
                 result["pdf_url"] = pdf_link['href']
                 if not result["pdf_url"].startswith('http'):
                     result["pdf_url"] = f"https://www.vikan.com{result['pdf_url']}"
-                print(f"📄 PDF URL found (fallback)")
+                logging.info("📄 PDF URL found (fallback)")
 
         return result
     
     except Exception as e:
         logging.error(f"❌ Error scraping Vikan: {e}")
-        print(f"❌ Error scraping Vikan: {e}")
         return result
 
 

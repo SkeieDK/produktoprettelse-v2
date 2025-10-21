@@ -1,9 +1,10 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-import subprocess
-import os
 from fastapi.responses import JSONResponse
-from fastapi import Request
+from fastapi import UploadFile, File, Request
+import subprocess
+from fastapi import UploadFile, File
+import os
 import json
 import shutil
 from PIL import Image
@@ -12,8 +13,31 @@ import re
 from typing import Optional
 import uuid
 from datetime import datetime
+import sys
 
 app = FastAPI()
+
+# Global exception logging middleware: ensures unhandled exceptions are logged
+@app.middleware("http")
+async def log_exceptions(request, call_next):
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as exc:
+        # Log full traceback to a file for debugging (avoid crashing the process)
+        import traceback, logging
+        logging.exception("Unhandled exception during request: %s", exc)
+        tb = traceback.format_exc()
+        try:
+            logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs'))
+            os.makedirs(logs_dir, exist_ok=True)
+            with open(os.path.join(logs_dir, 'backend_exceptions.log'), 'a', encoding='utf-8') as f:
+                f.write(f"--- {datetime.utcnow().isoformat()}Z {request.method} {request.url}\n")
+                f.write(tb + "\n")
+        except Exception:
+            pass
+        # Return a JSON 500 so the frontend sees an error but the server keeps running
+        return JSONResponse(status_code=500, content={"error": "internal_server_error", "detail": str(exc)})
 
 # Simple in-memory job store. In production swap for a persistent store or queue.
 JOBS = {}
@@ -45,8 +69,25 @@ def run_scraper(background_tasks: BackgroundTasks):
         JOBS[job_id_local]['status'] = 'running'
         JOBS[job_id_local]['started_at'] = datetime.utcnow().isoformat() + 'Z'
         try:
-            # Run the scraper script in a subprocess
-            subprocess.run(["python", "supplier_pi/supplier_scraper.py"], cwd=project_root, check=True)
+            # Run the scraper script in a subprocess using the running Python interpreter
+            python_exe = sys.executable or 'python'
+            # capture output so we can surface logs on failure and persist them
+            # run as a package module so imports like 'supplier_pi.utils' resolve
+            proc = subprocess.run([python_exe, "-m", "supplier_pi.supplier_scraper"], cwd=project_root, capture_output=True, text=True)
+            # write job log
+            try:
+                logs_dir = os.path.join(project_root, 'logs')
+                os.makedirs(logs_dir, exist_ok=True)
+                with open(os.path.join(logs_dir, f'job_{job_id_local}.log'), 'w', encoding='utf-8') as lf:
+                    lf.write('=== STDOUT ===\n')
+                    lf.write(proc.stdout or '')
+                    lf.write('\n=== STDERR ===\n')
+                    lf.write(proc.stderr or '')
+            except Exception:
+                pass
+            # treat non-zero exit as failure
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
 
             # after scraper completes, process images so frontend can consume thumbnails
             try:
@@ -59,9 +100,21 @@ def run_scraper(background_tasks: BackgroundTasks):
             JOBS[job_id_local]['status'] = 'done'
             JOBS[job_id_local]['finished_at'] = datetime.utcnow().isoformat() + 'Z'
         except subprocess.CalledProcessError as e:
+            # Ensure we have a log file reference for debugging
+            try:
+                logs_dir = os.path.join(project_root, 'logs')
+                log_path = os.path.join(logs_dir, f'job_{job_id_local}.log')
+                # append error summary if not present
+                with open(log_path, 'a', encoding='utf-8') as lf:
+                    lf.write('\n=== CALLEDPROCESSERROR ===\n')
+                    lf.write(str(e) + '\n')
+                    lf.write(getattr(e, 'stderr', '') or '')
+            except Exception:
+                log_path = None
+
             JOBS[job_id_local]['status'] = 'failed'
             JOBS[job_id_local]['finished_at'] = datetime.utcnow().isoformat() + 'Z'
-            JOBS[job_id_local]['message'] = f'scraper_error: {e}'
+            JOBS[job_id_local]['message'] = f'scraper_error: exit {getattr(e, "returncode", "?")}; log={log_path}'
         except Exception as e:
             JOBS[job_id_local]['status'] = 'failed'
             JOBS[job_id_local]['finished_at'] = datetime.utcnow().isoformat() + 'Z'
@@ -296,6 +349,102 @@ def get_results(request: Request):
             return {"error": f"Failed to read results: {e}"}
     else:
         return {"status": "No results found yet"}
+
+
+@app.post("/upload-csv")
+async def upload_csv(file: UploadFile = File(...)):
+    """Accept a CSV upload and save it to cache/uploads — processing is a separate step.
+
+    This async handler uses await file.read() and logs detailed information to
+    logs/upload.log so we can diagnose multipart upload issues without crashing the server.
+    """
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    uploads_dir = os.path.join(project_root, 'cache', 'uploads')
+    os.makedirs(uploads_dir, exist_ok=True)
+    filename = os.path.basename(file.filename)
+    save_path = os.path.join(uploads_dir, filename)
+    try:
+        data = await file.read()
+        with open(save_path, 'wb') as out_f:
+            out_f.write(data)
+        # Log upload
+        try:
+            logs_dir = os.path.join(project_root, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            with open(os.path.join(logs_dir, 'upload.log'), 'a', encoding='utf-8') as lf:
+                lf.write(f"{datetime.utcnow().isoformat()}Z UPLOAD {filename} size={len(data)}\n")
+        except Exception:
+            pass
+    except Exception as e:
+        # Log and return a helpful error without crashing
+        try:
+            logs_dir = os.path.join(project_root, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            with open(os.path.join(logs_dir, 'upload_errors.log'), 'a', encoding='utf-8') as lf:
+                lf.write(f"{datetime.utcnow().isoformat()}Z UPLOAD_ERROR {filename} error={e}\n")
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"error": f"Failed to save upload: {e}"})
+
+    return {"status": "uploaded", "filename": filename}
+
+
+@app.post('/process-csv')
+def process_csv(filename: Optional[str] = None):
+    """Process a previously uploaded CSV (filename relative to cache/uploads). If no filename
+    is provided, process the most recently uploaded file.
+    Writes cache/processed_products.json and returns row count.
+    """
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    uploads_dir = os.path.join(project_root, 'cache', 'uploads')
+    if filename:
+        upload_path = os.path.join(uploads_dir, os.path.basename(filename))
+    else:
+        # pick latest file in uploads_dir
+        files = [os.path.join(uploads_dir, f) for f in os.listdir(uploads_dir)] if os.path.isdir(uploads_dir) else []
+        if not files:
+            return JSONResponse(status_code=400, content={"error": "no uploads available"})
+        upload_path = max(files, key=os.path.getmtime)
+
+    if not os.path.exists(upload_path):
+        return JSONResponse(status_code=400, content={"error": "upload file not found"})
+
+    try:
+        import pandas as pd
+        from csv_data_transformation.sanitering import CSVSanitering
+        df = pd.read_csv(upload_path)
+        san = CSVSanitering(df)
+        processed_df = san.process()
+        out_path = os.path.join(project_root, 'cache', 'processed_products.json')
+        san.to_json(out_path)
+        return {"status": "processed", "rows": len(processed_df)}
+    except Exception as e:
+        # write detailed error for diagnosis
+        try:
+            logs_dir = os.path.join(project_root, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            with open(os.path.join(logs_dir, 'process_csv_errors.log'), 'a', encoding='utf-8') as lf:
+                import traceback
+                lf.write(f"{datetime.utcnow().isoformat()}Z PROCESS_CSV_ERROR file={upload_path} error={e}\n")
+                lf.write(traceback.format_exc() + "\n")
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"error": f"Processing failed: {e}"})
+
+
+@app.get('/processed')
+def get_processed():
+    """Return the processed_products.json if present for UI preview."""
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    processed_path = os.path.join(project_root, 'cache', 'processed_products.json')
+    if not os.path.exists(processed_path):
+        return JSONResponse(status_code=404, content={"error": "no processed file"})
+    try:
+        with open(processed_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return JSONResponse(content=data)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to read processed file: {e}"})
 
 
 @app.post("/fix-images")

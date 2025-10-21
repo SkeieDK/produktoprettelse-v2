@@ -1,22 +1,22 @@
 import sys
 import os
-import importlib
-import pandas as pd
-import logging
 import json
-import zipfile
+import logging
+import time
+from datetime import datetime
+from pathlib import Path
 import shutil
-from utils.image_processor import resize_and_save_all_images
+import subprocess
+import re
+import importlib
 import requests
-from utils.pdf_extractor import extract_text_from_pdf
+import pandas as pd
+import zipfile
+from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
+from supplier_pi.utils.image_processor import resize_and_save_all_images
 
-# Ensure the parent directory is in sys.path for relative imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# === Setup folders and file paths ===
-
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# repository layout helpers
+project_root = Path(__file__).resolve().parents[1]
 user_profile = os.path.expanduser("~")
 excel_path = os.path.join(project_root, 'data', 'produktoprettelse_bulk_AI.xlsx')
 download_folder = os.path.join(project_root, 'cache', 'downloads')
@@ -31,14 +31,36 @@ os.makedirs(original_folder, exist_ok=True)
 os.makedirs(pdf_folder, exist_ok=True)
 
 # === Logging ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("main.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
-)
+# Use a SafeStream to avoid UnicodeEncodeError when console encoding doesn't support emojis.
+class SafeStream:
+    def write(self, msg):
+        try:
+            sys.__stdout__.write(msg)
+        except Exception:
+            try:
+                enc = sys.__stdout__.encoding or 'utf-8'
+                safe = msg.encode('utf-8', errors='replace').decode(enc, errors='replace')
+                sys.__stdout__.write(safe)
+            except Exception:
+                # Last resort: ignore
+                pass
+    def flush(self):
+        try:
+            sys.__stdout__.flush()
+        except Exception:
+            pass
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+# Remove existing handlers if reloading
+for h in list(logger.handlers):
+    logger.removeHandler(h)
+file_handler = logging.FileHandler("main.log", encoding="utf-8")
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+stream_handler = logging.StreamHandler(SafeStream())
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # Load vendor map from JSON (case-insensitive keys)
 with open(os.path.join(os.path.dirname(__file__), 'utils', 'vendor_map.json'), encoding='utf-8') as f:
@@ -52,7 +74,8 @@ def get_vendor_module(vendor_name):
     if not module_name:
         logging.error(f"No vendor module mapping found for '{vendor_name}' in vendor_map.json (case-insensitive)")
         return None
-    module_path = f"supplier_modules.{module_name.lower()}"
+    # vendor modules live under the supplier_pi package
+    module_path = f"supplier_pi.supplier_modules.{module_name.lower()}"
     try:
         return importlib.import_module(module_path)
     except ModuleNotFoundError as e:
@@ -69,6 +92,7 @@ def process_vendor_row(vendor_name, row, driver=None, download_folder=None):
     product_url = ""
     fallback_pdfs = []
     pdf_folder = os.path.join(project_root, 'cache', 'prod_pdf_information')
+    os.makedirs(pdf_folder, exist_ok=True)
     pdf_columns = [
         "DatabladMGURL", "DatabladURL", "DeclarationOfComplianceURL", "ProductDataSheetURL", "SDSDocumentURL", "MSDSDocumentURL"
     ]
@@ -166,6 +190,7 @@ def process_vendor_row(vendor_name, row, driver=None, download_folder=None):
         else:
             logging.error(f"Missing ImageURL for fallback image processing in row {prod_num}")
     supplier_info = clean_supplier_info(supplier_info)
+    # Keep things simple: don't capture raw HTML snapshots. We only mark missing fields.
     # Gather image info for summary
     if img_name:
         for file in os.listdir(original_folder):
@@ -188,7 +213,7 @@ def process_vendor_row(vendor_name, row, driver=None, download_folder=None):
     }
     run_summary = {
         "product_number": prod_num,
-        "status": "success" if supplier_info and product_url else "partial" if supplier_info or product_url else "failed",
+        "status": ("success" if supplier_info and product_url else "partial" if supplier_info or product_url else "failed"),
         "images_found": len(image_files),
         "image_sizes": image_sizes,
         "supplier_info_source": supplier_info_source,
@@ -240,7 +265,7 @@ def download_and_extract_images(image_zip_url, product_number, img_name, downloa
         return 0
     
     try:
-        print(f"📥 Downloading image ZIP...")
+        logging.info("📥 Downloading image ZIP...")
         zip_path = os.path.join(download_folder, f"{product_number}_images.zip")
         extract_path = os.path.join(download_folder, f"{product_number}_extracted_images")
         
@@ -278,8 +303,8 @@ def download_and_extract_images(image_zip_url, product_number, img_name, downloa
             os.remove(zip_path)
         if os.path.exists(extract_path):
             shutil.rmtree(extract_path)
-        
-        print(f"✅ Extracted {img_counter} images")
+
+        logging.info(f"✅ Extracted {img_counter} images")
         return img_counter
         
     except Exception as e:
@@ -298,7 +323,7 @@ def download_images_from_urls(image_urls, product_number, img_name, download_fol
     try:
         os.makedirs(original_folder, exist_ok=True)
         img_counter = 0
-        
+
         for i, url in enumerate(image_urls, start=1):
             try:
                 resp = requests.get(url, timeout=10, stream=True)
@@ -312,10 +337,10 @@ def download_images_from_urls(image_urls, product_number, img_name, download_fol
                 img_counter += 1
             except Exception as e:
                 logging.warning(f"⚠️ Could not download image {url}: {e}")
-        
-        print(f"✅ Downloaded {img_counter} images")
+
+        logging.info(f"✅ Downloaded {img_counter} images")
         return img_counter
-        
+
     except Exception as e:
         logging.error(f"❌ Error downloading images: {e}")
         return 0
@@ -338,16 +363,89 @@ if __name__ == "__main__":
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
+        from selenium.common.exceptions import SessionNotCreatedException
         from webdriver_manager.chrome import ChromeDriverManager
+        import shutil, subprocess, re
+
         options = Options()
-        options.add_argument("--headless=new")
+        # use classic headless for compatibility
+        options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920x1080")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--remote-debugging-port=9222")
+        # extra flags that improve headless reliability on some Windows hosts
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--no-zygote")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--single-process")
         options.add_experimental_option("prefs", {"download.prompt_for_download": False})
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+        # Try to locate a Chrome binary explicitly on Windows if available
+        chrome_path = shutil.which("chrome") or shutil.which("google-chrome") or shutil.which("chrome.exe")
+        if not chrome_path:
+            possible_windows = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ]
+            for p in possible_windows:
+                if os.path.exists(p):
+                    chrome_path = p
+                    break
+        if chrome_path:
+            options.binary_location = chrome_path
+            logging.info(f"Using Chrome binary: {chrome_path}")
+        else:
+            logging.warning("Chrome binary not found in PATH or common locations; ensure Chrome is installed and compatible with chromedriver.")
+
+        # Helper: try to get chrome version (returns e.g. '117.0.5938.132')
+        def _get_chrome_version(path):
+            try:
+                out = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=3)
+                txt = (out.stdout or out.stderr or '').strip()
+                m = re.search(r"(\d+\.\d+\.\d+\.\d+)", txt)
+                if m:
+                    return m.group(1)
+            except Exception:
+                return None
+            return None
+
+        chrome_version = _get_chrome_version(chrome_path) if chrome_path else None
+        if chrome_version:
+            logging.info(f"Detected Chrome version: {chrome_version}")
+
+        # Try installing a matching chromedriver when possible; fall back to default installer
+        driver_exe = None
+        try:
+            if chrome_version:
+                try:
+                    driver_exe = ChromeDriverManager(version=chrome_version).install()
+                except Exception:
+                    logging.info("Could not install matching chromedriver; falling back to default webdriver-manager behaviour")
+            if not driver_exe:
+                driver_exe = ChromeDriverManager().install()
+
+            driver = webdriver.Chrome(service=Service(driver_exe), options=options)
+        except SessionNotCreatedException:
+            logging.exception("SessionNotCreatedException: Chrome webdriver could not create a session. Will retry once without headless for debugging/compatibility.")
+            # retry once with headless disabled (useful for local debugging or environments where headless fails)
+            try:
+                options_no_head = Options()
+                # copy essential options but remove headless
+                options_no_head.add_argument("--window-size=1920x1080")
+                options_no_head.add_argument("--no-sandbox")
+                options_no_head.add_argument("--disable-dev-shm-usage")
+                options_no_head.add_argument("--disable-features=VizDisplayCompositor")
+                options_no_head.add_argument("--no-zygote")
+                options_no_head.add_argument("--disable-software-rasterizer")
+                options_no_head.add_argument("--single-process")
+                if chrome_path:
+                    options_no_head.binary_location = chrome_path
+                driver = webdriver.Chrome(service=Service(driver_exe), options=options_no_head)
+                logging.info("Retry without headless succeeded — consider using this mode for further debugging")
+            except Exception:
+                logging.exception("Retry without headless also failed. Please check Chrome/Chromedriver compatibility or run in Docker with pinned browser.")
+                raise
 
         supplier_data_list = []
         run_summary_list = []
@@ -368,45 +466,43 @@ if __name__ == "__main__":
                     "error": str(e)
                 })
         # Print run summary report
-        print("\n=== Run Summary ===")
+        logging.info("=== Run Summary ===")
         for item in run_summary_list:
-            print(f"Product: {item['product_number']}")
-            print(f"  Status: {item['status']}")
-            print(f"  Images found: {item['images_found']}")
+            logging.info(f"Product: {item['product_number']}")
+            logging.info(f"  Status: {item['status']}")
+            logging.info(f"  Images found: {item['images_found']}")
             if item['images_found'] > 0:
-                print(f"  Image sizes: {item['image_sizes']}")
-            print(f"  Supplier info source: {item['supplier_info_source']}")
+                logging.info(f"  Image sizes: {item['image_sizes']}")
+            logging.info(f"  Supplier info source: {item['supplier_info_source']}")
             if item.get('missing_supplier_info'):
-                print("  Missing supplier info")
+                logging.info("  Missing supplier info")
             if item.get('missing_product_url'):
-                print("  Missing product URL")
+                logging.info("  Missing product URL")
             if item.get('error'):
-                print(f"  Error: {item['error']}")
-            print()
+                logging.info(f"  Error: {item['error']}")
         # Save supplier data to JSON
         output_json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cache', 'supplier_info_output.json'))
         try:
             os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
             with open(output_json_path, 'w', encoding='utf-8') as f:
                 json.dump(supplier_data_list, f, ensure_ascii=False, indent=4)
-            print(f"✅ Supplier info saved to {output_json_path}")
+            logging.info(f"✅ Supplier info saved to {output_json_path}")
         except Exception as e:
             logging.error(f"Failed to save supplier info to JSON: {e}")
-            print(f"❌ Failed to save supplier info: {e}")
         # Save run summary as well so the frontend can display counts, sizes and source info
         summary_json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cache', 'run_summary.json'))
         try:
             with open(summary_json_path, 'w', encoding='utf-8') as sf:
                 json.dump(run_summary_list, sf, ensure_ascii=False, indent=4)
-            print(f"✅ Run summary saved to {summary_json_path}")
+            logging.info(f"✅ Run summary saved to {summary_json_path}")
         except Exception as e:
             logging.error(f"Failed to save run summary to JSON: {e}")
-            print(f"❌ Failed to save run summary: {e}")
         driver.quit()
 
     except Exception as e:
         logging.error(f"Fatal error in main execution: {e}")
-        print(f"❌ Fatal error: {e}")
+        # avoid printing characters that may not be supported by console encoding
+        logging.error(str(e))
         try:
             driver.quit()
         except:

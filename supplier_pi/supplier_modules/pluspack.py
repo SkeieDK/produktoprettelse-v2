@@ -23,7 +23,7 @@ def scrape(driver, product_number):
     }
     
     try:
-        print(f"\n🔍 Searching PlusPack for: {product_number}")
+        logging.info(f"\n🔍 Searching PlusPack for: {product_number}")
         search_url = f"https://www.pluspack.com/products/global-search/{product_number}"
         driver.get(search_url)
         time.sleep(1.5)
@@ -34,7 +34,7 @@ def scrape(driver, product_number):
         )
         product_url = product_link.get_attribute("href")
         result["product_url"] = product_url
-        print(f"🔗 Product page found")
+        logging.info("🔗 Product page found")
         driver.get(product_url)
         time.sleep(1.5)
 
@@ -47,7 +47,7 @@ def scrape(driver, product_number):
             aria_label = link.get("aria-label", "").lower()
             if "image" in aria_label and ".zip" in href:
                 result["image_zip_url"] = href
-                print(f"📥 Image ZIP URL found")
+                logging.info("📥 Image ZIP URL found")
                 break
         
         # Search for PDF link
@@ -56,14 +56,13 @@ def scrape(driver, product_number):
             aria_label = link.get("aria-label", "").lower()
             if "data sheet" in aria_label or href.endswith(".pdf"):
                 result["pdf_url"] = href
-                print(f"📄 PDF URL found")
+                logging.info("📄 PDF URL found")
                 break
 
         return result
 
     except Exception as e:
         logging.error(f"❌ Error scraping PlusPack: {e}")
-        print(f"❌ Error scraping PlusPack: {e}")
         return result
 
 

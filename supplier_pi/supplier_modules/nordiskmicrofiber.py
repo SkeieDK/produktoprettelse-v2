@@ -22,7 +22,7 @@ def scrape(product_number, img_name, download_folder, original_folder, image_fol
     supplier_text = ""
     product_url = ""
     try:
-        from utils.pdf_extractor import extract_text_from_pdf
+    from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
         search_url = f"https://nordiskmicrofiber.dk/?s={product_number}"
         _log(f"Søger på: {search_url}")
         def is_product_link(href):
@@ -176,7 +176,7 @@ def scrape(product_number, img_name, download_folder, original_folder, image_fol
     finally:
         # Billedbehandling hvis muligt
         try:
-            from utils.image_processor import resize_and_save_all_images
+            from supplier_pi.utils.image_processor import resize_and_save_all_images
             if img_name:
                 _log(f"Starter billedbehandling for {img_name}...")
                 try:

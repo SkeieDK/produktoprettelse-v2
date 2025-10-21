@@ -6,11 +6,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/run-scraper': 'http://localhost:8000',
-      '/results': 'http://localhost:8000',
-      '/jobs': 'http://localhost:8000',
-      '/fix-images': 'http://localhost:8000',
-      '/static': 'http://localhost:8000'
+      '/run-scraper': { target: 'http://localhost:8000', changeOrigin: true },
+      '/results': { target: 'http://localhost:8000', changeOrigin: true },
+      '/jobs': { target: 'http://localhost:8000', changeOrigin: true },
+      '/fix-images': { target: 'http://localhost:8000', changeOrigin: true },
+      '/upload-csv': { target: 'http://localhost:8000', changeOrigin: true },
+      '/process-csv': { target: 'http://localhost:8000', changeOrigin: true },
+      '/processed': { target: 'http://localhost:8000', changeOrigin: true },
+      '/static': { target: 'http://localhost:8000', changeOrigin: true }
     }
   }
 });

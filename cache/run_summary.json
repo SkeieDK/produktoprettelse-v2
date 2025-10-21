@@ -2,40 +2,604 @@
     {
         "product_number": "E146220 - Deaktiveret",
         "status": "success",
-        "images_found": 3,
+        "images_found": 4,
         "image_sizes": [
             [
-                1200,
-                800
+                590,
+                231
             ],
             [
-                1200,
-                800
+                590,
+                141
             ],
             [
-                1200,
-                1200
+                590,
+                128
+            ],
+            [
+                590,
+                367
             ]
         ],
-        "supplier_info_source": "description",
+        "supplier_info_source": "pdf",
         "missing_supplier_info": false,
         "missing_product_url": false
     },
     {
         "product_number": "E146230 - Deaktiveret",
         "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                357
+            ],
+            [
+                125,
+                515
+            ],
+            [
+                590,
+                394
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                363,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146240 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                207
+            ],
+            [
+                590,
+                232
+            ],
+            [
+                590,
+                394
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                383
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146250 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                89,
+                515
+            ],
+            [
+                590,
+                282
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                385,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146260 - Deaktiveret",
+        "status": "success",
+        "images_found": 4,
+        "image_sizes": [
+            [
+                590,
+                40
+            ],
+            [
+                498,
+                515
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                590,
+                476
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146270 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                353,
+                515
+            ],
+            [
+                590,
+                261
+            ],
+            [
+                590,
+                394
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                426
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146280 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                288
+            ],
+            [
+                84,
+                515
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                420,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146290 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                469
+            ],
+            [
+                135,
+                515
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                504,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146300 - Deaktiveret",
+        "status": "success",
+        "images_found": 4,
+        "image_sizes": [
+            [
+                82,
+                515
+            ],
+            [
+                262,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                158,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146310 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                46
+            ],
+            [
+                515,
+                515
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                469
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146320 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                45
+            ],
+            [
+                537,
+                515
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                468
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146330 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                530,
+                515
+            ],
+            [
+                590,
+                56
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                590,
+                336
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146340 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                528,
+                515
+            ],
+            [
+                590,
+                82
+            ],
+            [
+                590,
+                394
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                590,
+                442
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146350 - Deaktiveret",
+        "status": "success",
+        "images_found": 4,
+        "image_sizes": [
+            [
+                562,
+                515
+            ],
+            [
+                590,
+                288
+            ],
+            [
+                216,
+                515
+            ],
+            [
+                590,
+                368
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146360 - Deaktiveret",
+        "status": "success",
+        "images_found": 3,
+        "image_sizes": [
+            [
+                590,
+                119
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                590,
+                347
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146370 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                289
+            ],
+            [
+                213,
+                515
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                533,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146380 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                220,
+                515
+            ],
+            [
+                590,
+                290
+            ],
+            [
+                344,
+                515
+            ],
+            [
+                380,
+                380
+            ],
+            [
+                572,
+                515
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146390 - Deaktiveret",
+        "status": "partial",
+        "images_found": 1,
+        "image_sizes": [
+            [
+                1500,
+                1500
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": true,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146400 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                590,
+                282
+            ],
+            [
+                446,
+                515
+            ],
+            [
+                509,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                307
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146410 - Deaktiveret",
+        "status": "success",
+        "images_found": 5,
+        "image_sizes": [
+            [
+                589,
+                442
+            ],
+            [
+                589,
+                442
+            ],
+            [
+                340,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                110
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146420 - Deaktiveret",
+        "status": "success",
+        "images_found": 4,
+        "image_sizes": [
+            [
+                590,
+                378
+            ],
+            [
+                516,
+                515
+            ],
+            [
+                1500,
+                1500
+            ],
+            [
+                590,
+                249
+            ]
+        ],
+        "supplier_info_source": "pdf",
+        "missing_supplier_info": false,
+        "missing_product_url": false
+    },
+    {
+        "product_number": "E146430 - Deaktiveret",
+        "status": "success",
         "images_found": 2,
         "image_sizes": [
             [
-                1200,
-                1200
+                4398,
+                2562
             ],
             [
-                1200,
-                1200
+                590,
+                344
             ]
         ],
-        "supplier_info_source": "description",
+        "supplier_info_source": "pdf",
         "missing_supplier_info": false,
         "missing_product_url": false
     }

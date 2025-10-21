@@ -462,44 +462,50 @@ class APIManager:
                 cache_info[filename] = {'exists': False}
         return cache_info
 
-# Global instance
-api_manager = APIManager()
+_api_manager = None
+
+def get_api_manager() -> APIManager:
+    """Lazy-instantiated APIManager. Instantiating at import time previously raised if API_KEY missing,
+    which could terminate processes unexpectedly. This factory defers instantiation until needed.
+    """
+    global _api_manager
+    if _api_manager is None:
+        _api_manager = APIManager()
+    return _api_manager
 
 # Convenience functions
 def get_categories(use_cache: bool = True):
-    """Hent processede kategorier"""
-    return api_manager.get_processed_categories(use_cache)
+    return get_api_manager().get_processed_categories(use_cache)
 
 def refresh_categories():
-    """Genindlæs kategorier fra API"""
-    api_manager.clear_cache("categories")
-    return api_manager.get_processed_categories(use_cache=False)
+    mgr = get_api_manager()
+    mgr.clear_cache("categories")
+    return mgr.get_processed_categories(use_cache=False)
 
 def get_products(use_cache: bool = True):
-    """Hent processede produkter"""
-    return api_manager.get_processed_products(use_cache)
+    return get_api_manager().get_processed_products(use_cache)
 
 def refresh_products():
-    """Genindlæs produkter fra API"""
-    api_manager.clear_cache("products")
-    return api_manager.get_processed_products(use_cache=False)
+    mgr = get_api_manager()
+    mgr.clear_cache("products")
+    return mgr.get_processed_products(use_cache=False)
 
 def get_cache_status():
-    """Få cache status"""
-    return api_manager.get_cache_info()
+    return get_api_manager().get_cache_info()
 
 if __name__ == "__main__":
     # Test script
     try:
         print("=== API Manager Test ===")
         # Test API key
-        if api_manager.api_key:
-            api_manager.logger.info("API_KEY fundet")
+        mgr = get_api_manager()
+        if mgr.api_key:
+            mgr.logger.info("API_KEY fundet")
         else:
-            api_manager.logger.error("API_KEY ikke fundet")
+            mgr.logger.error("API_KEY ikke fundet")
             exit(1)
         # Test kategori hentning
-        categories = api_manager.get_processed_categories()
+        categories = mgr.get_processed_categories()
         if categories:
             print(f"\n📊 Eksempel kategori data:")
             example = categories[0]
@@ -514,7 +520,7 @@ if __name__ == "__main__":
                 print(f"  Niveau {level}: {count} kategorier")
         # Test produkt hentning
         print(f"\n=== Test Produkter ===")
-        products = api_manager.get_processed_products(use_cache=True)
+        products = mgr.get_processed_products(use_cache=True)
         if products:
             print(f"✅ {len(products)} produkter hentet")
             # Vis eksempel produkt
@@ -524,11 +530,20 @@ if __name__ == "__main__":
                 print(f"  {key}: {value}")
         # Vis cache status
         print(f"\n=== Cache Status ===")
-        cache_info = api_manager.get_cache_info()
+        cache_info = mgr.get_cache_info()
         for filename, info in cache_info.items():
             if info['exists']:
                 print(f"✅ {filename}: {info['age_hours']:.1f}t gammel, {info['size_mb']:.1f}MB")
             else:
                 print(f"❌ {filename}: Ikke cached")
     except Exception as e:
-        api_manager.logger.error(f"Fejl: {e}")
+        mgr = None
+        try:
+            mgr = get_api_manager()
+        except Exception:
+            pass
+        if mgr:
+            mgr.logger.error(f"Fejl: {e}")
+        else:
+            import logging
+            logging.error(f"Fejl i test block: {e}")
