@@ -457,29 +457,52 @@ if __name__ == "__main__":
                 supplier_data, run_summary = process_vendor_row(vendor_name, product, driver=driver, download_folder=download_folder)
                 supplier_data_list.append(supplier_data)
                 run_summary_list.append(run_summary)
+                # write incremental supplier_info_output.json and run_summary.json so /results grows during the run
+                try:
+                    cache_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cache'))
+                    os.makedirs(cache_dir, exist_ok=True)
+                    out_path = os.path.join(cache_dir, 'supplier_info_output.json')
+                    summary_path = os.path.join(cache_dir, 'run_summary.json')
+                    # atomic write for supplier info
+                    tmp_out = out_path + '.tmp'
+                    with open(tmp_out, 'w', encoding='utf-8') as outf:
+                        json.dump(supplier_data_list, outf, ensure_ascii=False, indent=2)
+                    os.replace(tmp_out, out_path)
+                    # atomic write for run summary
+                    tmp_sum = summary_path + '.tmp'
+                    with open(tmp_sum, 'w', encoding='utf-8') as sf:
+                        json.dump(run_summary_list, sf, ensure_ascii=False, indent=2)
+                    os.replace(tmp_sum, summary_path)
+                except Exception:
+                    logging.exception('Failed to write incremental output files')
             except Exception as e:
                 run_summary_list.append({
                     "product_number": product.get("PROD_NUM", ""),
                     "status": "failed",
                     "missing_supplier_info": True,
                     "missing_product_url": True,
+                    "images_found": 0,
+                    "image_sizes": [],
+                    "supplier_info_source": "none",
                     "error": str(e)
                 })
         # Print run summary report
         logging.info("=== Run Summary ===")
         for item in run_summary_list:
-            logging.info(f"Product: {item['product_number']}")
-            logging.info(f"  Status: {item['status']}")
-            logging.info(f"  Images found: {item['images_found']}")
-            if item['images_found'] > 0:
-                logging.info(f"  Image sizes: {item['image_sizes']}")
-            logging.info(f"  Supplier info source: {item['supplier_info_source']}")
+            pn = item.get('product_number', '')
+            logging.info(f"Product: {pn}")
+            logging.info(f"  Status: {item.get('status', 'unknown')}")
+            images_found = item.get('images_found', 0)
+            logging.info(f"  Images found: {images_found}")
+            if images_found and item.get('image_sizes'):
+                logging.info(f"  Image sizes: {item.get('image_sizes')}")
+            logging.info(f"  Supplier info source: {item.get('supplier_info_source')}")
             if item.get('missing_supplier_info'):
                 logging.info("  Missing supplier info")
             if item.get('missing_product_url'):
                 logging.info("  Missing product URL")
             if item.get('error'):
-                logging.info(f"  Error: {item['error']}")
+                logging.info(f"  Error: {item.get('error')}")
         # Save supplier data to JSON
         output_json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cache', 'supplier_info_output.json'))
         try:

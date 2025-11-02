@@ -36,9 +36,17 @@ dist/
 build/
 
 # Cache and generated artifacts
-cache/
-/cache/
-cache/**/public_images/
+cache/*.json
+cache/downloads/
+cache/public_images/
+data/cache/*.json
+data/output/*
+data/input/*.csv
+!data/input/.gitkeep
+!data/output/.gitkeep
+
+# Main log file (scripts use logs/ folder now)
+main.log
 
 # Python packaging
 *.egg-info/
