@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""
+Step 3: Process Images
+Organizes images from Step 2 into data/output/images/ with relative paths.
+
+Input:  data/output/supplier_info.json (has absolute image paths)
+Output: data/output/enriched_products.json (updated with relative image paths)
+        data/output/images/ (organized images)
+
+Logs to: logs/3_process_images.log
+"""
+
+import json
+import os
+import sys
+import logging
+from pathlib import Path
+from shutil import copy2
+from PIL import Image
+import yaml
+from datetime import datetime
+
+# Setup paths
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def load_config():
+    """Load config.yaml with defaults."""
+    config_path = PROJECT_ROOT / "config.yaml"
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            # Normalize path keys
+            if "paths" in config:
+                paths = config["paths"]
+                return {
+                    "paths": {
+                        "input": paths.get("input_dir", "data/input"),
+                        "output": paths.get("output_dir", "data/output"),
+                        "cache": paths.get("cache_dir", "data/cache"),
+                        "logs": paths.get("logs_dir", "logs"),
+                    },
+                    "logging": config.get("logging", {"level": "INFO"})
+                }
+            return config
+    return {
+        "paths": {
+            "input": str(PROJECT_ROOT / "data" / "input"),
+            "output": str(PROJECT_ROOT / "data" / "output"),
+            "cache": str(PROJECT_ROOT / "data" / "cache"),
+            "logs": str(PROJECT_ROOT / "logs"),
+        },
+        "logging": {"level": "INFO"}
+    }
+
+
+def setup_logging(log_dir: Path, log_file_name: str = "3_process_images.log"):
+    """Configure logging to file and console"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / log_file_name
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # File handler (UTF-8)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+    file_handler.setFormatter(formatter)
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    # Configure root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()  # Remove existing handlers
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+def atomic_write_json(file_path, data):
+    """Write JSON atomically: write to .tmp, then rename."""
+    tmp_path = str(file_path) + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    Path(tmp_path).replace(file_path)
+
+
+def process_images(logger, config):
+    """
+    Process images from supplier_info.json:
+    1. Read supplier_info.json
+    2. Copy images to data/output/images/
+    3. Update JSON with relative paths
+    4. Write to enriched_products.json
+    """
+    output_dir = Path(config["paths"]["output"])
+    images_dir = output_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+    
+    supplier_info_path = output_dir / "supplier_info.json"
+    if not supplier_info_path.exists():
+        logger.error(f"Input file not found: {supplier_info_path}")
+        return False
+    
+    logger.info(f"Reading supplier info: {supplier_info_path}")
+    with open(supplier_info_path, 'r', encoding='utf-8') as f:
+        supplier_data = json.load(f)
+    
+    # Handle both list and single dict
+    if isinstance(supplier_data, dict):
+        supplier_data = [supplier_data]
+    
+    logger.info(f"Processing {len(supplier_data)} products")
+    
+    processed_count = 0
+    image_count = 0
+    
+    for idx, product in enumerate(supplier_data, 1):
+        product_num = product.get("product_number", f"product_{idx}")
+        logger.info(f"[{idx}/{len(supplier_data)}] {product_num}")
+        
+        if "images" not in product or not product["images"]:
+            logger.debug(f"  No images for {product_num}")
+            continue
+        
+        # Process each image
+        new_images = []
+        for img_path_str in product["images"]:
+            if not img_path_str:
+                continue
+            
+            img_path = Path(img_path_str)
+            if not img_path.exists():
+                logger.warning(f"  Image not found: {img_path}")
+                continue
+            
+            try:
+                # Generate unique filename
+                img_name = img_path.name
+                dest_path = images_dir / img_name
+                
+                # Copy image
+                copy2(img_path, dest_path)
+                
+                # Verify it's a valid image
+                try:
+                    Image.open(dest_path).verify()
+                except Exception as e:
+                    logger.warning(f"  Image verification failed: {img_name} - {e}")
+                    dest_path.unlink()  # Remove invalid image
+                    continue
+                
+                # Store relative path
+                rel_path = f"images/{img_name}"
+                new_images.append(rel_path)
+                image_count += 1
+                logger.debug(f"  Copied: {img_name}")
+                
+            except Exception as e:
+                logger.error(f"  Error processing image {img_path}: {e}")
+                continue
+        
+        # Update product with relative paths
+        product["images"] = new_images
+        logger.debug(f"  Updated {len(new_images)} images")
+        processed_count += 1
+    
+    # Write enriched output
+    enriched_path = output_dir / "enriched_products.json"
+    atomic_write_json(enriched_path, supplier_data)
+    logger.info(f"✓ Enriched JSON: {enriched_path}")
+    
+    logger.info("=" * 60)
+    logger.info("✓ Step 3 complete")
+    logger.info(f"  Processed: {processed_count} products")
+    logger.info(f"  Images copied: {image_count}")
+    logger.info(f"  Output images: {images_dir}")
+    logger.info(f"  Output JSON: {enriched_path}")
+    logger.info("=" * 60)
+    
+    return True
+
+
+def main():
+    """Main entry point."""
+    config = load_config()
+    logger = setup_logging(Path(config["paths"]["logs"]))
+    
+    logger.info("=" * 60)
+    logger.info("Step 3: Image Processing")
+    logger.info("=" * 60)
+    
+    success = process_images(logger, config)
+    
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
