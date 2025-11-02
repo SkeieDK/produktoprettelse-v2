@@ -30,6 +30,46 @@ from ai_config import (
     get_model_config,
 )
 
+# Safe stream for console output (handles encoding errors)
+class SafeStream:
+    def __init__(self):
+        self.encoding = 'utf-8'
+    
+    def write(self, msg):
+        if not msg:
+            return
+        try:
+            sys.__stdout__.write(msg)
+        except UnicodeEncodeError:
+            try:
+                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
+                sys.__stdout__.write(safe_msg)
+            except Exception:
+                try:
+                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
+                    sys.__stdout__.write(safe_msg)
+                except Exception:
+                    pass
+    
+    def flush(self):
+        try:
+            sys.__stdout__.flush()
+        except Exception:
+            pass
+    
+    def isatty(self):
+        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
+
+class SafeStreamHandler(logging.StreamHandler):
+    """Custom logging handler that prevents encoding errors"""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.stream.write(msg)
+            self.stream.write('\n')
+            self.stream.flush()
+        except Exception:
+            self.handleError(record)
 
 def load_config():
     """Load config.yaml with defaults."""
@@ -77,8 +117,8 @@ def setup_logging(log_dir: Path, log_file_name: str = "4_generate_ai.log"):
     file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
     file_handler.setFormatter(formatter)
     
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Console handler with SafeStream
+    console_handler = SafeStreamHandler(SafeStream())
     console_handler.setFormatter(formatter)
     
     # Configure root logger
@@ -199,13 +239,26 @@ def atomic_write_json(file_path, data):
     Path(tmp_path).replace(file_path)
 
 
-def generate_ai_descriptions(logger, config):
+def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     """
-    Read enriched_products.json, enrich with AI descriptions, write final_products.json
+    Read enriched_products.json (or custom file), enrich with AI descriptions, write final_products.json
+    
+    Args:
+        logger: Logger instance
+        config: Configuration dict
+        input_file: Optional path to custom JSON input file. If not provided, uses default enriched_products.json
     """
     output_dir = Path(config["paths"]["output"])
     
-    enriched_path = output_dir / "enriched_products.json"
+    # Determine input file
+    if input_file:
+        enriched_path = Path(input_file)
+        if not enriched_path.is_absolute():
+            # If relative, make it relative to output dir
+            enriched_path = output_dir / input_file
+    else:
+        enriched_path = output_dir / "enriched_products.json"
+    
     if not enriched_path.exists():
         logger.error(f"Input file not found: {enriched_path}")
         return False
@@ -296,7 +349,7 @@ def generate_ai_descriptions(logger, config):
 
 
 def main():
-    """Main entry point."""
+    """Main entry point. Accepts optional input file as command-line argument."""
     config = load_config()
     logger = setup_logging(Path(config["paths"]["logs"]))
     
@@ -304,7 +357,13 @@ def main():
     logger.info("Step 4: AI-Powered Product Enrichment")
     logger.info("=" * 60)
     
-    success = generate_ai_descriptions(logger, config)
+    # Check if input file provided as argument
+    input_file = None
+    if len(sys.argv) > 1:
+        input_file = sys.argv[1]
+        logger.info(f"Using custom input file: {input_file}")
+    
+    success = generate_ai_descriptions(logger, config, input_file)
     
     return 0 if success else 1
 

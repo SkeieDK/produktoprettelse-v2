@@ -13,7 +13,7 @@ Easily editable by users and clients without touching the main script.
 DEFAULT_MODEL = "gpt-4o-mini"
 
 # Fallback model if primary fails (optional)
-FALLBACK_MODEL = "gpt-4"
+FALLBACK_MODEL = "gpt-5-mini"
 
 # Temperature: controls creativity (0.0 = deterministic, 1.0 = creative)
 # For product descriptions: 0.7 is good (factual yet engaging)

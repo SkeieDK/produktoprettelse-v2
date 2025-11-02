@@ -25,6 +25,47 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+# Safe stream for console output (handles encoding errors)
+class SafeStream:
+    def __init__(self):
+        self.encoding = 'utf-8'
+    
+    def write(self, msg):
+        if not msg:
+            return
+        try:
+            sys.__stdout__.write(msg)
+        except UnicodeEncodeError:
+            try:
+                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
+                sys.__stdout__.write(safe_msg)
+            except Exception:
+                try:
+                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
+                    sys.__stdout__.write(safe_msg)
+                except Exception:
+                    pass
+    
+    def flush(self):
+        try:
+            sys.__stdout__.flush()
+        except Exception:
+            pass
+    
+    def isatty(self):
+        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
+
+class SafeStreamHandler(logging.StreamHandler):
+    """Custom logging handler that prevents encoding errors"""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.stream.write(msg)
+            self.stream.write('\n')
+            self.stream.flush()
+        except Exception:
+            self.handleError(record)
+
 def load_config():
     """Load config.yaml with defaults."""
     config_path = PROJECT_ROOT / "config.yaml"
@@ -70,8 +111,8 @@ def setup_logging(log_dir: Path, log_file_name: str = "3_process_images.log"):
     file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
     file_handler.setFormatter(formatter)
     
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Console handler with SafeStream
+    console_handler = SafeStreamHandler(SafeStream())
     console_handler.setFormatter(formatter)
     
     # Configure root logger

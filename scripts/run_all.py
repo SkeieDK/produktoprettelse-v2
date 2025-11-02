@@ -54,29 +54,16 @@ console = Console() if RICH_AVAILABLE else None
 
 def print_header():
     """Print pipeline header."""
-    if RICH_AVAILABLE:
-        console.print("\n")
-        console.print(Panel(
-            "[bold cyan]Produktoprettelse-v2 Pipeline[/bold cyan]\n"
-            "[dim]Complete product enrichment workflow[/dim]",
-            expand=False,
-            border_style="cyan"
-        ))
-    else:
-        print("\n" + "=" * 60)
-        print("Produktoprettelse-v2 Pipeline")
-        print("Complete product enrichment workflow")
-        print("=" * 60 + "\n")
+    print("\n" + "=" * 60)
+    print("Produktoprettelse-v2 Pipeline")
+    print("Complete product enrichment workflow")
+    print("=" * 60 + "\n")
 
 
 def print_step(step_num: int, title: str, description: str):
     """Print step header."""
-    if RICH_AVAILABLE:
-        console.print(f"\n[bold yellow]Step {step_num}: {title}[/bold yellow]")
-        console.print(f"[dim]{description}[/dim]")
-    else:
-        print(f"\n--- Step {step_num}: {title} ---")
-        print(f"{description}\n")
+    print(f"\n--- Step {step_num}: {title} ---")
+    print(f"{description}\n")
 
 
 def run_script(step_num: int, script_name: str, title: str, verbose: bool = False) -> Tuple[bool, str]:
@@ -96,75 +83,40 @@ def run_script(step_num: int, script_name: str, title: str, verbose: bool = Fals
     
     if not script_path.exists():
         error_msg = f"Script not found: {script_path}"
-        if RICH_AVAILABLE:
-            console.print(f"[red]✗ {error_msg}[/red]")
-        else:
-            print(f"ERROR: {error_msg}")
+        print(f"ERROR: {error_msg}")
         return False, error_msg
     
     print_step(step_num, title, f"Running {script_name}...")
     
     try:
-        if RICH_AVAILABLE:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-                transient=True
-            ) as progress:
-                task = progress.add_task(f"Processing...", total=None)
-                
-                if verbose:
-                    result = subprocess.run(
-                        [sys.executable, str(script_path)],
-                        cwd=PROJECT_ROOT,
-                        check=True
-                    )
-                else:
-                    result = subprocess.run(
-                        [sys.executable, str(script_path)],
-                        cwd=PROJECT_ROOT,
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    # Print last few lines of output
-                    if result.stdout:
-                        lines = result.stdout.strip().split('\n')
-                        for line in lines[-5:]:
-                            console.print(f"  [dim]{line}[/dim]")
-        else:
-            result = subprocess.run(
-                [sys.executable, str(script_path)],
-                cwd=PROJECT_ROOT,
-                check=True
-            )
+        # Simple subprocess execution - no Rich formatting here
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=PROJECT_ROOT,
+            capture_output=(not verbose),
+            text=True,
+            check=True
+        )
         
-        if RICH_AVAILABLE:
-            console.print(f"[green]✓ Step {step_num} complete[/green]")
-        else:
-            print(f"✓ Step {step_num} complete")
+        # Print last few lines of output if captured
+        if not verbose and result.stdout:
+            lines = result.stdout.strip().split('\n')
+            for line in lines[-5:]:
+                print(f"  {line}")
         
+        print(f"[OK] Step {step_num} complete")
         return True, f"Step {step_num} succeeded"
         
     except subprocess.CalledProcessError as e:
         error_msg = f"Step {step_num} failed with exit code {e.returncode}"
-        if RICH_AVAILABLE:
-            console.print(f"[red]✗ {error_msg}[/red]")
-            if e.stderr:
-                console.print(f"[red]{e.stderr}[/red]")
-        else:
-            print(f"ERROR: {error_msg}")
-            if e.stderr:
-                print(e.stderr)
+        print(f"ERROR: {error_msg}")
+        if e.stderr:
+            print(f"STDERR: {e.stderr[:500]}")
         return False, error_msg
     
     except Exception as e:
-        error_msg = f"Step {step_num} error: {e}"
-        if RICH_AVAILABLE:
-            console.print(f"[red]✗ {error_msg}[/red]")
-        else:
-            print(f"ERROR: {error_msg}")
+        error_msg = f"Step {step_num} error: {str(e)}"
+        print(f"ERROR: {error_msg}")
         return False, error_msg
 
 
@@ -181,53 +133,22 @@ def check_output_files() -> dict:
 
 
 def print_summary(stop_after: int, results: list, outputs: dict):
-    """Print final summary."""
-    if RICH_AVAILABLE:
-        console.print("\n")
-        
-        # Results table
-        table = Table(title="Pipeline Results", expand=False)
-        table.add_column("Step", style="cyan")
-        table.add_column("Status", style="green")
-        
-        for i, (success, msg) in enumerate(results, 1):
-            if success:
-                table.add_row(f"Step {i}", "[green]✓ Success[/green]")
-            else:
-                table.add_row(f"Step {i}", "[red]✗ Failed[/red]")
-        
-        console.print(table)
-        
-        # Output files table
-        output_table = Table(title="Output Files", expand=False)
-        output_table.add_column("File", style="cyan")
-        output_table.add_column("Status", style="green")
-        
-        for name, exists in outputs.items():
-            status = "[green]✓[/green]" if exists else "[dim]—[/dim]"
-            output_table.add_row(name, status)
-        
-        console.print(output_table)
-        
-        # Summary panel
-        successful = sum(1 for success, _ in results if success)
-        console.print(Panel(
-            f"[bold]{successful}/{len(results)} steps completed successfully[/bold]\n"
-            f"Output directory: [cyan]{DATA_OUTPUT}[/cyan]",
-            expand=False,
-            border_style="green" if successful == len(results) else "yellow"
-        ))
-    else:
-        print("\n" + "=" * 60)
-        print("PIPELINE SUMMARY")
-        print("=" * 60)
-        for i, (success, msg) in enumerate(results, 1):
-            status = "✓ Success" if success else "✗ Failed"
-            print(f"Step {i}: {status}")
-        print("\nOutput files:")
-        for name, exists in outputs.items():
-            status = "✓" if exists else "—"
-            print(f"  {status} {name}")
+    """Print final summary in plain text format."""
+    print_summary_plain(results, outputs)
+
+
+def print_summary_plain(results: list, outputs: dict):
+    """Print summary in plain text format."""
+    print("\n" + "=" * 60)
+    print("PIPELINE SUMMARY")
+    print("=" * 60)
+    for i, (success, msg) in enumerate(results, 1):
+        status = "[OK] Success" if success else "[FAIL] Failed"
+        print(f"Step {i}: {status}")
+    print("\nOutput files:")
+    for name, exists in outputs.items():
+        status = "[OK]" if exists else "[--]"
+        print(f"  {status} {name}")
 
 
 def main():
@@ -277,10 +198,7 @@ Examples:
     # Check that input data exists
     input_dir = PROJECT_ROOT / "data" / "input"
     if not list(input_dir.glob("*.csv")):
-        if console:
-            console.print("[red]✗ No CSV files found in data/input/[/red]")
-        else:
-            print("ERROR: No CSV files found in data/input/")
+        print("ERROR: No CSV files found in data/input/")
         return 1
     
     # Run steps
@@ -300,10 +218,7 @@ Examples:
         results.append((success, msg))
         
         if not success:
-            if console:
-                console.print(f"\n[red]Stopping pipeline due to step {step_num} failure[/red]")
-            else:
-                print(f"\nStopping pipeline due to step {step_num} failure")
+            print(f"\nStopping pipeline due to step {step_num} failure")
             break
     
     # Print summary

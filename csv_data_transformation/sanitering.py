@@ -148,6 +148,74 @@ class CSVSanitering:
         )
         return self.df
 
+    def clean_barcode_by_area(self):
+        """Clean PROD_BARCODE_NUMBER based on DataAreaID.
+        - For 'cc' DataAreaID: Remove leading 'C' from barcode
+        - For 'mln': Keep as-is (or apply other rules as needed)
+        """
+        def clean_barcode(row):
+            barcode = row.get("PROD_BARCODE_NUMBER")
+            area_id = row.get("DataAreaID", "")
+            
+            if not isinstance(barcode, str) or not barcode:
+                return barcode
+            
+            # For 'cc' area, remove leading 'C'
+            if area_id == "cc" and barcode.startswith("C"):
+                return barcode[1:]
+            
+            # For 'mln' or other areas, return as-is
+            return barcode
+        
+        self.df["PROD_BARCODE_NUMBER"] = self.df.apply(clean_barcode, axis=1)
+        return self.df
+
+    def apply_dataarea_rules(self):
+        """
+        Apply all DataAreaID-specific business rules.
+        
+        Rules by DataAreaID:
+        
+        'cc' (Continental Europe):
+        - Remove leading 'C' from barcode
+        - Use SalesUnitID for all unit-based calculations (prices, conversions, etc.)
+        
+        'mln' (MLN specific):
+        - Apply 10% markup to cost prices
+        - Use StockUnitID for all unit-based calculations (prices, conversions, etc.)
+        """
+        def apply_rules(row):
+            area_id = row.get("DataAreaID", "")
+            
+            # MLN: Apply 10% markup to cost prices
+            if area_id == "mln":
+                # Apply 10% markup to ConvertedSystemCost (which becomes PROD_COST_PRICE)
+                if "PROD_COST_PRICE" in row and pd.notna(row["PROD_COST_PRICE"]):
+                    row["PROD_COST_PRICE"] = row["PROD_COST_PRICE"] * 1.10
+                
+                # Use StockUnitID for calculations
+                if "StockUnitID" in row:
+                    row["ACTIVE_UNIT_ID"] = row["StockUnitID"]
+            
+            # CC: Remove leading 'C' from barcode (handled separately for clarity)
+            if area_id == "cc":
+                barcode = row.get("PROD_BARCODE_NUMBER", "")
+                if isinstance(barcode, str) and barcode.startswith("C"):
+                    row["PROD_BARCODE_NUMBER"] = barcode[1:]
+                
+                # Use SalesUnitID for calculations
+                if "SalesUnitID" in row:
+                    row["ACTIVE_UNIT_ID"] = row["SalesUnitID"]
+            
+            # Default: if ACTIVE_UNIT_ID not set, use SalesUnitID
+            if "ACTIVE_UNIT_ID" not in row or pd.isna(row.get("ACTIVE_UNIT_ID")):
+                row["ACTIVE_UNIT_ID"] = row.get("SalesUnitID", row.get("StockUnitID", ""))
+            
+            return row
+        
+        self.df = self.df.apply(apply_rules, axis=1)
+        return self.df
+
     def add_prod_num(self, max_prod_num: str):
         """
         Generer unikt PROD_NUM for hver række, startende fra højeste eksisterende PROD_NUM og +10 for hver.
@@ -192,10 +260,12 @@ class CSVSanitering:
             cache_path = os.path.abspath(cache_path)
         self.change_types()
         self.replace_value("ImageURL", "1XL", "processed")
+        self.rename_columns()
+        # Apply DataAreaID rules FIRST (before price calculations, so 10% markup affects Flerstk. pris and Retail_Price)
+        self.apply_dataarea_rules()
         self.add_flerstk_pris()
         self.add_besparelse()
         self.add_retail_price()
-        self.rename_columns()
         max_prod_num = self.get_highest_prod_num_from_cache(cache_path)
         self.add_prod_num(max_prod_num)
         self.add_img_name()

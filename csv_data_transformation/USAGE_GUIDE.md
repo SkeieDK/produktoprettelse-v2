@@ -144,6 +144,75 @@ product_scraper.py
   (scraping pipeline)
 ```
 
+## DataAreaID-Specific Rules
+
+The sanitization process handles different business logic based on **DataAreaID**, which identifies the data source or sales channel.
+
+### Supported DataAreaIDs
+
+#### **'cc' (Continental Europe)**
+- **Barcode Cleaning**: Remove leading 'C' from `PROD_BARCODE_NUMBER`
+  - Example: `C5705023742184` → `5705023742184`
+- **Unit ID Usage**: Use `SalesUnitID` for all unit-based calculations
+  - Affects: Price calculations, conversions, packaging info
+- **Price Markup**: No additional markup applied
+- **Output Field**: `ACTIVE_UNIT_ID` = SalesUnitID
+
+#### **'mln' (MLN)**
+- **Barcode Cleaning**: No changes (keep as-is)
+- **Unit ID Usage**: Use `StockUnitID` for all unit-based calculations
+  - Affects: Price calculations, conversions, packaging info
+- **Price Markup**: Apply **10% markup** to cost prices
+  - Applied to: `PROD_COST_PRICE` (before Flerstk. pris and Retail_Price calculation)
+  - Cascades to: `Flerstk. pris` and `Retail_Price` automatically
+- **Output Field**: `ACTIVE_UNIT_ID` = StockUnitID
+
+### Implementation Details
+
+The `apply_dataarea_rules()` method in `sanitering.py` handles all DataAreaID-specific transformations:
+
+```python
+def apply_dataarea_rules(self):
+    """Apply all DataAreaID-specific business rules."""
+    # Rules by DataAreaID:
+    # - 'cc': Remove barcode prefix, use SalesUnitID
+    # - 'mln': Apply 10% cost markup, use StockUnitID
+```
+
+**Processing Order** (ensures rules work correctly):
+1. change_types()
+2. replace_value()
+3. rename_columns()
+4. **apply_dataarea_rules()** ← DataAreaID rules applied HERE
+5. add_flerstk_pris() ← Uses ACTIVE_UNIT_ID and cost prices
+6. add_besparelse()
+7. add_retail_price()
+8. add_prod_num()
+9. add_img_name()
+
+### Using ACTIVE_UNIT_ID
+
+After sanitization, use the `ACTIVE_UNIT_ID` field for any calculations:
+
+```python
+# After sanitization
+for product in products:
+    unit_id = product["ACTIVE_UNIT_ID"]  # Already set to correct value
+    # Use unit_id for conversions, pricing, etc.
+```
+
+### Adding New DataAreaIDs
+
+To support a new DataAreaID, add rules to `apply_dataarea_rules()`:
+
+```python
+if area_id == "new_area":
+    # Add any specific logic here
+    if "PROD_COST_PRICE" in row:
+        row["PROD_COST_PRICE"] = row["PROD_COST_PRICE"] * 1.05  # Example: 5% markup
+    row["ACTIVE_UNIT_ID"] = row.get("SalesUnitID", "")
+```
+
 ## Fields Mapping
 
 | sanitering.py (after rename) | JSON output | Purpose |

@@ -12,21 +12,21 @@ Edit `scripts/ai_config.py`:
 
 ```python
 DEFAULT_MODEL = "gpt-4o-mini"        # Current primary model
-FALLBACK_MODEL = "gpt-4"             # Backup if primary fails
+FALLBACK_MODEL = "gpt-5-mini"             # Backup if primary fails
 ```
 
 **Available OpenAI models:**
 - `gpt-4o-mini` — Fast, cheap, recommended ⭐
+- `gpt-5-mini` — Latest mini model with better reasoning
 - `gpt-4` — More expensive, better reasoning
 - `gpt-3.5-turbo` — Very fast, cheapest
-- `gpt-4-turbo` — Balance of speed and quality
 
 ### 2. Adjust Output Quality
 
 ```python
 DEFAULT_TEMPERATURE = 0.7   # 0.0 = deterministic, 1.0 = creative
 
-MAX_TOKENS = 1000           # Increase for longer descriptions
+MAX_TOKENS = 1000          # Increase for longer descriptions
 ```
 
 **Temperature guidance:**

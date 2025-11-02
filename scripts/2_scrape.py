@@ -32,23 +32,50 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
 from supplier_pi.utils.image_processor import resize_and_save_all_images
 
-# Safe stream for console output (no emoji crashes)
+# Safe stream for console output (handles encoding errors)
 class SafeStream:
+    def __init__(self):
+        self.encoding = 'utf-8'
+    
     def write(self, msg):
+        if not msg:
+            return
         try:
+            # Try direct write first
             sys.__stdout__.write(msg)
-        except Exception:
+        except UnicodeEncodeError:
             try:
-                enc = sys.__stdout__.encoding or 'utf-8'
-                safe = msg.encode('utf-8', errors='replace').decode(enc, errors='replace')
-                sys.__stdout__.write(safe)
+                # Fallback: encode with error replacement
+                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
+                sys.__stdout__.write(safe_msg)
             except Exception:
-                pass
+                # Last resort: ignore errors
+                try:
+                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
+                    sys.__stdout__.write(safe_msg)
+                except Exception:
+                    pass
+    
     def flush(self):
         try:
             sys.__stdout__.flush()
         except Exception:
             pass
+    
+    def isatty(self):
+        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
+
+class SafeStreamHandler(logging.StreamHandler):
+    """Custom logging handler that prevents encoding errors"""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # Use SafeStream's write method
+            self.stream.write(msg)
+            self.stream.write('\n')
+            self.stream.flush()
+        except Exception:
+            self.handleError(record)
 
 def setup_logging(log_dir: Path):
     """Configure logging to file and console"""
@@ -63,7 +90,7 @@ def setup_logging(log_dir: Path):
     file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
     file_handler.setFormatter(formatter)
     
-    console_handler = logging.StreamHandler(SafeStream())
+    console_handler = SafeStreamHandler(SafeStream())
     console_handler.setFormatter(formatter)
     
     logger = logging.getLogger()
