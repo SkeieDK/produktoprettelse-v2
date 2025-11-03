@@ -157,20 +157,48 @@ def get_api_key(logger, config):
 def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str, temperature: float, max_retries: int = 3) -> Optional[Dict[str, Any]]:
     """Call OpenAI API with retry logic using v1.0+ client."""
     
-    # Build prompt from config
-    product_name = product.get("product_number", "Unknown")
+    # Extract fields from product (handles both enriched_products.json and _processed.json)
+    product_name = product.get("product_number") or product.get("PROD_NUM", "Unknown")
     supplier_info = product.get("supplier_info", "")
     product_url = product.get("product_url", "")
+    
+    # Extract metadata fields
+    brand = product.get("brand") or product.get("BrandID", "Unknown")
+    color = product.get("color") or product.get("Color", "Unknown")
+    size = product.get("size") or product.get("FIELD_20", "Unknown")
+    packaging = product.get("packaging")
+    if not packaging:
+        # Choose packaging field based on DataAreaID
+        data_area = product.get("DataAreaID", "cc")
+        if data_area == "mln":
+            packaging = product.get("PackingInfoInStockUnit", "Unknown")
+        else:
+            packaging = product.get("SalesUnit_PackingInfo", "Unknown")
+    
+    certifications = product.get("certifications") or product.get("Certifications", "Unknown")
+    afgift = product.get("afgift") or product.get("FIELD_18") or 0
+    # Ensure afgift is numeric
+    try:
+        afgift = float(afgift) if afgift else 0
+    except (ValueError, TypeError):
+        afgift = 0
+    
+    # Include product notes if available
+    prod_notes = product.get("PROD_NOTES")
+    if prod_notes is None:
+        prod_notes = ""
+    if prod_notes:
+        supplier_info = f"{supplier_info}\n\nProdukt noter: {prod_notes}".strip()
     
     user_prompt = get_user_prompt(
         product_name=product_name,
         category=product.get("category", "Unknown"),
-        brand=product.get("brand", "Unknown"),
-        color=product.get("color", "Unknown"),
-        size=product.get("size", "Unknown"),
-        packaging=product.get("packaging", "Unknown"),
-        certifications=product.get("certifications", "Unknown"),
-        afgift=product.get("afgift", 0),
+        brand=brand,
+        color=color,
+        size=size,
+        packaging=packaging,
+        certifications=certifications,
+        afgift=afgift,
         supplier_info=supplier_info,
         product_url=product_url
     )
@@ -253,8 +281,8 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     # Determine input file
     if input_file:
         enriched_path = Path(input_file)
-        if not enriched_path.is_absolute():
-            # If relative, make it relative to output dir
+        # Use as-is if absolute or if it exists as-is, otherwise try relative to output dir
+        if not enriched_path.exists() and not enriched_path.is_absolute():
             enriched_path = output_dir / input_file
     else:
         enriched_path = output_dir / "enriched_products.json"
