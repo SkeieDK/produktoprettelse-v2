@@ -178,21 +178,22 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
         product_cats = product.get('Categories', [])
         
         # Also check DefaultCategoryId and PrimaryCategoryId
-        default_cat = str(product.get('DefaultCategoryId', ''))
-        primary_cat = str(product.get('PrimaryCategoryId', ''))
+        default_cat = product.get('DefaultCategoryId', '')
+        primary_cat = product.get('PrimaryCategoryId', '')
         
         category_ids = set()
         
         # Collect all category IDs
         for cat in product_cats:
             cat_id = str(cat.get('id', ''))
-            if cat_id:
+            if cat_id and cat_id != '':
                 category_ids.add(cat_id)
         
-        if default_cat:
-            category_ids.add(default_cat)
-        if primary_cat:
-            category_ids.add(primary_cat)
+        # Add default/primary categories (only if not empty string)
+        if default_cat and str(default_cat) != '':
+            category_ids.add(str(default_cat))
+        if primary_cat and str(primary_cat) != '':
+            category_ids.add(str(primary_cat))
         
         # Add product to relevant categories (limit 3 examples per category)
         for cat_id in category_ids:
@@ -266,10 +267,15 @@ def get_category_user_prompt(product: Dict, category_tree: str) -> str:
     prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', 'Unknown'))
     vendor = product.get('PrimaryVendorName', 'Unknown')
     
-    # Get supplier info if available
+    # Get supplier info if available (can be dict or string)
     supplier_info = product.get('supplier_info', {})
-    description = supplier_info.get('description', '')
-    specifications = supplier_info.get('specifications', '')
+    if isinstance(supplier_info, dict):
+        description = supplier_info.get('description', '')
+        specifications = supplier_info.get('specifications', '')
+    else:
+        # If supplier_info is a string, use it as description
+        description = str(supplier_info) if supplier_info else ''
+        specifications = ''
     
     # Get any existing category hints
     existing_cat = product.get('DefaultCategoryId', '')
