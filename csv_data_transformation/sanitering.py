@@ -3,11 +3,93 @@ import json
 import os
 import numpy as np
 from typing import List, Dict
+from pathlib import Path
 
 class CSVSanitering:
     """Modul til databehandling og transformation af CSV-data"""
+    
+    # Class-level lookup tables (loaded once)
+    LOOKUP_TABLES = {}
+    
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
+        
+        # Load lookup tables on first instantiation
+        if not CSVSanitering.LOOKUP_TABLES:
+            CSVSanitering._load_lookup_tables()
+    
+    @classmethod
+    def _load_lookup_tables(cls):
+        """Load all reference tables from csv_data_transformation/tabeller/"""
+        tabeller_dir = Path(__file__).parent / "tabeller"
+        
+        tables = {
+            "leverandor": "leverandor_tabel.json",
+            "enheds_numerering": "enheds_numerering_tabel.json",
+            "enhedskonvertering": "enhedskonvertering_tabel.json",
+            "konstant": "konstant_tabel.json",
+            "miljomaerke": "miljomaerke_tabel.json"
+        }
+        
+        for key, filename in tables.items():
+            table_path = tabeller_dir / filename
+            if table_path.exists():
+                try:
+                    with open(table_path, 'r', encoding='utf-8') as f:
+                        cls.LOOKUP_TABLES[key] = json.load(f)
+                except Exception as e:
+                    print(f"Warning: Could not load {filename}: {e}")
+            else:
+                print(f"Warning: Lookup table not found: {table_path}")
+    
+    def normalize_vendor_name(self, vendor_name: str) -> str:
+        """Normalize vendor name using leverandor_tabel"""
+        if not isinstance(vendor_name, str) or not vendor_name.strip():
+            return vendor_name
+        
+        table = self.LOOKUP_TABLES.get("leverandor", {})
+        # Try exact match first
+        if vendor_name in table:
+            return table[vendor_name]
+        
+        # Try case-insensitive match
+        for key, normalized in table.items():
+            if key.lower() == vendor_name.lower():
+                return normalized
+        
+        # Return original if no match
+        return vendor_name
+    
+    def decode_unit_name(self, unit_code: str) -> str:
+        """Decode unit code to unit name using enheds_numerering_tabel"""
+        if not isinstance(unit_code, str):
+            unit_code = str(unit_code).strip() if pd.notna(unit_code) else ""
+        
+        if not unit_code:
+            return unit_code
+        
+        table = self.LOOKUP_TABLES.get("enheds_numerering", {})
+        return table.get(unit_code, unit_code)
+    
+    def convert_unit_abbreviation(self, unit_abbr: str) -> str:
+        """Convert unit abbreviation using enhedskonvertering_tabel"""
+        if not isinstance(unit_abbr, str) or not unit_abbr.strip():
+            return unit_abbr
+        
+        table = self.LOOKUP_TABLES.get("enhedskonvertering", {})
+        return table.get(unit_abbr.lower(), unit_abbr)
+    
+    def decode_certification(self, cert_code: str) -> str:
+        """Decode certification code using miljomaerke_tabel"""
+        if not isinstance(cert_code, str) or not cert_code.strip():
+            return cert_code
+        
+        table = self.LOOKUP_TABLES.get("miljomaerke", {})
+        return table.get(cert_code, cert_code)
+    
+    def get_constants(self) -> Dict:
+        """Get default constants from konstant_tabel"""
+        return self.LOOKUP_TABLES.get("konstant", {})
 
     def change_types(self):
         # Konverter relevante kolonner til korrekte typer
@@ -101,6 +183,149 @@ class CSVSanitering:
             "ArticleInfoSales": "PROD_NOTES"
         }
         self.df = self.df.rename(columns=rename_map)
+        return self.df
+
+    def normalize_vendors(self):
+        """Normalize vendor names using leverandor_tabel lookup"""
+        if "PrimaryVendorName" in self.df.columns:
+            self.df["PrimaryVendorName"] = self.df["PrimaryVendorName"].apply(self.normalize_vendor_name)
+        return self.df
+
+    def add_packing_info(self):
+        """Add FIELD_17: Packing info based on DataAreaID
+        - For 'cc': Use SalesUnit_PackingInfo
+        - For 'mln': Use PackingInfoInStockUnit
+        """
+        def get_packing_info(row):
+            area_id = row.get("DataAreaID", "")
+            if area_id == "mln":
+                return row.get("PackingInfoInStockUnit", "")
+            else:  # Default to cc or any other area
+                return row.get("SalesUnit_PackingInfo", "")
+        
+        self.df["FIELD_17"] = self.df.apply(get_packing_info, axis=1)
+        return self.df
+
+    def parse_unit_description(self):
+        """Add FIELD_1: Parse unit description from FIELD_17
+        Converts packing info like "4 fl", "12.5 kg", "1 set" into standardized format
+        """
+        import re
+        
+        def parse_unit(field_17):
+            if not isinstance(field_17, str) or not field_17.strip():
+                return "1 stk."
+            
+            text = field_17.lower().strip()
+            
+            # Check for special cases
+            if text == "" or text == "1 set":
+                return "1 sæt"
+            if text == "1 stk" or text == "stk" or text == "1 stk.":
+                return "1 stk."
+            
+            # Split by "/" for left and right parts
+            parts = text.split("/")
+            left = parts[0].strip() if parts else ""
+            right = parts[1].strip() if len(parts) > 1 else ""
+            
+            # Extract number + unit from left side (e.g., "4 fl", "12.5 kg")
+            if "x" in left:
+                antal_enhed = left.split("x")[0]
+            else:
+                antal_enhed = left
+            
+            # Extract number and unit separately
+            antal_raw = re.sub(r'[^0-9,.]', '', antal_enhed)
+            antal_standard = antal_raw.replace(".", ",")
+            
+            enhed = re.sub(r'[^a-zæøå]', '', antal_enhed)
+            
+            # Standardize right side (unit type)
+            antalstype_map = {
+                "krt": "ks", "ps": "ps", "pk": "pk", "fl": "fl",
+                "ds": "ds", "rl": "rl"
+            }
+            antalstype = antalstype_map.get(right, right if right else "stk")
+            
+            # Check if only unit provided
+            only_unit = not antal_raw and enhed and not (text == "" or text == "1 set")
+            
+            # Assemble result
+            if text == "1 stk" or text == "stk":
+                return "1 stk."
+            elif only_unit:
+                return f"1 {enhed}."
+            elif antal_standard and enhed and antalstype:
+                return f"1 {antalstype} (á {antal_standard} {enhed})"
+            else:
+                return "1 stk."
+        
+        self.df["FIELD_1"] = self.df["FIELD_17"].apply(parse_unit)
+        return self.df
+
+    def map_unit_ids(self):
+        """Add PROD_UNIT_ID: Map SalesUnitID to unit using enheds_numerering_tabel"""
+        def map_unit(row):
+            sales_unit_id = row.get("SalesUnitID")
+            if pd.isna(sales_unit_id):
+                return 1
+            
+            unit_id_str = str(sales_unit_id).strip()
+            table = self.LOOKUP_TABLES.get("enheds_numerering", {})
+            
+            # Try to get the unit code and return it, or default to 1
+            result = table.get(unit_id_str)
+            if result:
+                return result
+            return unit_id_str if unit_id_str else 1
+        
+        self.df["PROD_UNIT_ID"] = self.df.apply(map_unit, axis=1)
+        return self.df
+
+    def decode_certifications(self):
+        """Add FIELD_2: Decode certification codes using miljomaerke_tabel
+        Searches for matching codes in Certifications field
+        """
+        def find_certification(code_text):
+            if pd.isna(code_text) or not isinstance(code_text, str) or not code_text.strip():
+                return None
+            
+            table = self.LOOKUP_TABLES.get("miljomaerke", {})
+            
+            # Check each code in the table for matches in code_text
+            for code, certification in table.items():
+                if code in code_text:
+                    return certification
+            
+            return None
+        
+        if "Certifications" in self.df.columns:
+            self.df["FIELD_2"] = self.df["Certifications"].apply(find_certification)
+        return self.df
+
+    def convert_unit_formats(self):
+        """Apply unit conversions to FIELD_17 using enhedskonvertering_tabel
+        E.g., krt → ks, set → sæt
+        """
+        table = self.LOOKUP_TABLES.get("enhedskonvertering", {})
+        
+        if "FIELD_17" in self.df.columns:
+            for original, converted in table.items():
+                self.df["FIELD_17"] = self.df["FIELD_17"].str.replace(
+                    original, converted, regex=False, case=False
+                )
+        
+        return self.df
+
+    def apply_constants(self):
+        """Add constant columns from konstant_tabel"""
+        constants = self.get_constants()
+        
+        for col_name, value in constants.items():
+            if col_name not in self.df.columns:
+                self.df[col_name] = value
+        
         return self.df
 
     def add_img_name(self):
@@ -258,17 +483,36 @@ class CSVSanitering:
         if cache_path is None:
             cache_path = os.path.join(os.path.dirname(__file__), '..', 'cache', 'products_cache.json')
             cache_path = os.path.abspath(cache_path)
+        
+        # Phase 1: Type conversions and basic cleanup
         self.change_types()
         self.replace_value("ImageURL", "1XL", "processed")
+        
+        # Phase 2: Column renames
         self.rename_columns()
-        # Apply DataAreaID rules FIRST (before price calculations, so 10% markup affects Flerstk. pris and Retail_Price)
+        
+        # Phase 3: Lookup table transformations
+        self.normalize_vendors()
+        self.add_packing_info()
+        self.parse_unit_description()
+        self.map_unit_ids()
+        self.decode_certifications()
+        self.convert_unit_formats()
+        self.apply_constants()
+        
+        # Phase 4: DataAreaID rules (before price calculations so markup cascades)
         self.apply_dataarea_rules()
+        
+        # Phase 5: Price calculations
         self.add_flerstk_pris()
         self.add_besparelse()
         self.add_retail_price()
+        
+        # Phase 6: Generate product IDs and metadata
         max_prod_num = self.get_highest_prod_num_from_cache(cache_path)
         self.add_prod_num(max_prod_num)
         self.add_img_name()
+        
         return self.df
 
     def to_json(self, output_path: str = None) -> str:
