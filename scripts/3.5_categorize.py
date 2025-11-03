@@ -159,63 +159,79 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
     Build a map of categories with example products from each.
     
     Returns:
-        Dict mapping category_id to {category_info, example_products}
+        Dict mapping category_id (PROD_CAT_ID) to {category_info, example_products}
     """
     logger.info("Building category-to-products map...")
     
-    # Create category map
+    # Create category map with PROD_CAT_ID as key
     cat_map = {}
+    # Also create a lookup from category_number to PROD_CAT_ID
+    cat_number_to_id = {}
+    
     for cat in categories:
         cat_id = str(cat['PROD_CAT_ID'])
+        cat_number = str(cat.get('category_number', ''))
+        
         cat_map[cat_id] = {
             'category_info': cat,
             'example_products': []
         }
+        
+        if cat_number:
+            cat_number_to_id[cat_number] = cat_id
+    
+    logger.info(f"Built lookup for {len(cat_number_to_id)} category numbers")
     
     # Map products to categories
     for product in products:
-        # Check Categories field
-        product_cats = product.get('Categories', [])
-        
-        # Also check DefaultCategoryId and PrimaryCategoryId
-        default_cat = product.get('DefaultCategoryId', '')
-        primary_cat = product.get('PrimaryCategoryId', '')
+        # Get category identifiers from product (these are category NUMBERS, not IDs)
+        default_cat_num = str(product.get('DefaultCategoryId', ''))
+        primary_cat_num = str(product.get('PrimaryCategoryId', ''))
         
         category_ids = set()
         
-        # Collect all category IDs
-        for cat in product_cats:
-            cat_id = str(cat.get('id', ''))
-            if cat_id and cat_id != '':
-                category_ids.add(cat_id)
+        # Convert category numbers to PROD_CAT_IDs
+        if default_cat_num and default_cat_num in cat_number_to_id:
+            category_ids.add(cat_number_to_id[default_cat_num])
         
-        # Add default/primary categories (only if not empty string)
-        if default_cat and str(default_cat) != '':
-            category_ids.add(str(default_cat))
-        if primary_cat and str(primary_cat) != '':
-            category_ids.add(str(primary_cat))
+        if primary_cat_num and primary_cat_num in cat_number_to_id:
+            category_ids.add(cat_number_to_id[primary_cat_num])
         
         # Add product to relevant categories (limit 3 examples per category)
+        product_name = product.get('ItemName', product.get('number', 'Unknown'))
+        
         for cat_id in category_ids:
             if cat_id in cat_map and len(cat_map[cat_id]['example_products']) < 3:
                 cat_map[cat_id]['example_products'].append({
-                    'name': product.get('ItemName', product.get('ItemID', 'Unknown')),
-                    'vendor': product.get('VendorNumber', ''),
-                    'item_id': product.get('ItemID', '')
+                    'name': product_name,
+                    'vendor': product.get('vendorNumber', ''),
+                    'number': product.get('number', '')
                 })
     
-    logger.info(f"Mapped products to {len([c for c in cat_map.values() if c['example_products']])} categories")
+    categories_with_products = len([c for c in cat_map.values() if c['example_products']])
+    logger.info(f"Mapped products to {categories_with_products} categories (out of {len(cat_map)} total)")
     return cat_map
 
 
-def build_category_tree(categories: List[Dict], category_product_map: Dict[str, Dict]) -> str:
+def build_category_tree(categories: List[Dict], category_product_map: Dict[str, Dict], compact: bool = False) -> str:
     """
     Build a formatted category tree for the AI prompt with example products.
-    Groups by hovedkategori (top level) for readability.
+    
+    Args:
+        categories: List of category dicts
+        category_product_map: Map of category_id to products
+        compact: If True, only show categories with products (to save tokens)
     """
     # Group by hovedkategori
     tree_dict = {}
     for cat in categories:
+        cat_id = str(cat['PROD_CAT_ID'])
+        
+        # Skip categories without products if compact mode
+        if compact and cat_id in category_product_map:
+            if not category_product_map[cat_id]['example_products']:
+                continue
+        
         hovedkat = cat.get('hovedkategori', 'Ingen hovedkategori')
         if hovedkat not in tree_dict:
             tree_dict[hovedkat] = []
@@ -224,17 +240,27 @@ def build_category_tree(categories: List[Dict], category_product_map: Dict[str, 
     # Build formatted tree with products
     tree_lines = []
     for hovedkat, cats in sorted(tree_dict.items()):
+        if not cats:  # Skip empty groups
+            continue
+            
         tree_lines.append(f"\n[{hovedkat}]")
         for cat in cats:
             cat_id = str(cat['PROD_CAT_ID'])
             path = cat.get('kategori_sti', cat.get('nederste_kategori', 'Unknown'))
+            
+            # Truncate path if too long
+            if len(path) > 60:
+                path = path[:57] + "..."
+            
             tree_lines.append(f"  - ID: {cat_id} | {path}")
             
             # Add example products if available
             if cat_id in category_product_map:
                 examples = category_product_map[cat_id]['example_products']
                 if examples:
-                    tree_lines.append(f"    Eksempler: {', '.join([p['name'] for p in examples[:3]])}")
+                    # Truncate product names to save tokens
+                    short_names = [p['name'][:40] for p in examples[:3]]
+                    tree_lines.append(f"    Ex: {', '.join(short_names)}")
     
     return "\n".join(tree_lines)
 
@@ -416,9 +442,9 @@ def process_products(
     logger.info(f"Mapping {len(api_products)} existing products to categories...")
     category_product_map = build_category_with_products_map(categories, api_products, logger)
     
-    # Build category tree once
+    # Build category tree once (compact mode to reduce tokens)
     logger.info(f"Building category tree from {len(categories)} categories...")
-    category_tree = build_category_tree(categories, category_product_map)
+    category_tree = build_category_tree(categories, category_product_map, compact=True)
     
     logger.info(f"Processing {len(products)} products with AI categorization...")
     logger.info(f"Model: {model}, Temperature: {temperature}, Confidence threshold: {confidence_threshold}%")
