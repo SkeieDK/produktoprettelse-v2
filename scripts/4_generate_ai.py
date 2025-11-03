@@ -158,7 +158,17 @@ def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str,
     """Call OpenAI API with retry logic using v1.0+ client."""
     
     # Extract fields from product (handles both enriched_products.json and _processed.json)
-    product_name = product.get("product_number") or product.get("PROD_NUM", "Unknown")
+    # Prefer human-friendly product name over internal codes
+    product_name = (
+        product.get("ORIGINAL_PROD_NAME")
+        or product.get("PROD_NUM_old")
+        or product.get("product_number")
+        or product.get("PROD_NUM")
+        or "Unknown"
+    )
+    # Strip status markers like " - Deaktiveret" if present
+    if isinstance(product_name, str) and " - Deaktiveret" in product_name:
+        product_name = product_name.replace(" - Deaktiveret", "").strip()
     supplier_info = product.get("supplier_info", "")
     product_url = product.get("product_url", "")
     
@@ -166,6 +176,13 @@ def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str,
     brand = product.get("brand") or product.get("BrandID", "Unknown")
     color = product.get("color") or product.get("Color", "Unknown")
     size = product.get("size") or product.get("FIELD_20", "Unknown")
+    # Derive category from available structured fields if not explicitly set
+    category = (
+        product.get("category")
+        or product.get("BunzlItemSubGroup")
+        or product.get("BunzlItemMainGroup")
+        or "Unknown"
+    )
     packaging = product.get("packaging")
     if not packaging:
         # Choose packaging field based on DataAreaID
@@ -192,7 +209,7 @@ def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str,
     
     user_prompt = get_user_prompt(
         product_name=product_name,
-        category=product.get("category", "Unknown"),
+        category=category,
         brand=brand,
         color=color,
         size=size,

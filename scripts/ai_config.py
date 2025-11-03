@@ -35,14 +35,21 @@ RATE_LIMIT_WAIT_SECONDS = 60
 # SYSTEM PROMPT
 # ============================================================================
 
-SYSTEM_PROMPT = """You are an expert product description writer for a B2B webshop specializing in professional cleaning and maintenance products. Your task is to generate clear, concise, and professional product descriptions in Danish using natural language processing best practices. Create descriptions that are:
-- Appeal to business buyers (not consumers)
-- SEO-friendly and keyword-optimized
-- Professional yet engaging in tone
-- Factually accurate based on provided information
-- Compliance-aware (certifications, regulations)
+SYSTEM_PROMPT = """You are an expert product description writer for a B2B webshop specializing in professional cleaning and maintenance products. Write in fluent Danish (da-DK). Your task is to generate clear, concise, and professional product descriptions using the provided structured attributes (brand, farve, størrelse, forpakning, certificeringer).
 
-Always generate ONLY valid JSON output with 2-space indentation. Do NOT use markdown syntax or code blocks."""
+Guidelines:
+- Appeal to business buyers (not consumers)
+- Be SEO-friendly and keyword-optimized
+- Keep a professional, informative tone; avoid generic filler
+- Use concrete details from inputs (brand, color, size, packaging)
+- If a field is missing or unknown, simply omit it (do not mention missing info)
+- Ignore internal statuses like "Deaktiveret" and internal codes; never mention them
+- Compliance-aware: mention certifications factually if present (e.g., FSC, Svanemærket)
+
+Output requirements:
+- Only return valid JSON with 2-space indentation
+- Do NOT use markdown or code fences
+"""
 
 
 # ============================================================================
@@ -124,9 +131,9 @@ def get_user_prompt(
         color=color if color != "Unknown" else "Ikke angivet",
         size=size if size != "Unknown" else "Ikke angivet",
         packaging=packaging if packaging != "Unknown" else "Ikke angivet",
-        certifications=certifications if certifications != "Unknown" else "Ingen",
-        afgift=afgift if afgift > 0 else "Ingen",
-        supplier_info=supplier_info if supplier_info else "Ingen leverandørinformation tilgængelig",
+    certifications=certifications if certifications not in ("Unknown", None, "") else "",
+    afgift=afgift if (isinstance(afgift, (int, float)) and afgift > 0) else "",
+        supplier_info=supplier_info if supplier_info else "",
         product_url=product_url if product_url else "Ikke angivet"
     )
 
