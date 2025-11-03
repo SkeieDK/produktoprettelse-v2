@@ -284,8 +284,62 @@ def process_vendor_row(vendor_name, row, driver, download_folder, original_folde
             if supplier_info:
                 supplier_info_source = "description"
     else:
-        # Fallback: try image URL if no vendor module
-        if image_url:
+        # Fallback: no vendor module found, try PDF columns + image URL
+        pdf_columns = [
+            "ProductDataSheetURL", "DatabladURL", "DatabladMGURL",
+            "DeclarationOfComplianceURL", "SDSDocumentURL", "MSDSDocumentURL"
+        ]
+        priority_pdf_column = "ProductDataSheetURL"
+        fallback_pdfs = []
+        
+        # Try priority PDF first
+        if pd.notna(row.get(priority_pdf_column)):
+            url = str(row.get(priority_pdf_column)).strip()
+            try:
+                r = requests.get(url, timeout=10)
+                if r.status_code == 200:
+                    pdf_path = Path(download_folder) / f"{product_number}.pdf"
+                    with open(pdf_path, "wb") as f:
+                        f.write(r.content)
+                    fallback_pdfs.append(pdf_path)
+            except Exception as e:
+                logging.warning(f"Failed to fetch priority PDF {url}: {e}")
+        
+        # Try other PDF columns
+        for col in [c for c in pdf_columns if c != priority_pdf_column]:
+            url = row.get(col)
+            if pd.notna(url):
+                url = str(url).strip()
+                test_urls = [url]
+                if "DeclarationOfCompliance/" in url:
+                    test_urls.append(url.replace("DeclarationOfCompliance/", "DeclarationOfConformity/"))
+                
+                for test_url in test_urls:
+                    try:
+                        r = requests.get(test_url, timeout=10)
+                        if r.status_code == 200:
+                            pdf_path = Path(download_folder) / f"{product_number}_{col}.pdf"
+                            with open(pdf_path, "wb") as f:
+                                f.write(r.content)
+                            fallback_pdfs.append(pdf_path)
+                            break
+                    except Exception as e:
+                        logging.debug(f"Could not fetch {test_url}: {e}")
+        
+        # Extract text from fallback PDFs
+        for pdf_path in fallback_pdfs:
+            try:
+                text = extract_pdf_text(str(pdf_path), download_folder, product_number)
+                if text.strip():
+                    supplier_info = text
+                    supplier_info_source = "pdf"
+                    logging.info(f"Extracted info from fallback PDF: {pdf_path.name}")
+                    break
+            except Exception as e:
+                logging.warning(f"Could not extract from {pdf_path}: {e}")
+        
+        # Fallback: try image URL if no PDF info found
+        if not supplier_info and image_url:
             try:
                 response = requests.get(image_url, timeout=10)
                 if response.status_code == 200:
