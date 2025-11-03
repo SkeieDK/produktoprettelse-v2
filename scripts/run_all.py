@@ -2,10 +2,11 @@
 """
 Produktoprettelse-v2: Complete Pipeline Orchestrator
 
-Runs all 4 steps of the product enrichment pipeline:
+Runs all steps of the product enrichment pipeline:
   1. Sanitize CSV input
   2. Scrape supplier information
   3. Process and organize images
+  3.5. AI-powered category assignment
   4. Generate AI descriptions
 
 Features:
@@ -16,7 +17,7 @@ Features:
   - Exit codes for automation/scripting
 
 Usage:
-  python scripts/run_all.py                    # Run all 4 steps
+  python scripts/run_all.py                    # Run all steps
   python scripts/run_all.py --stop-after 2    # Run steps 1-2
   python scripts/run_all.py --verbose          # Show detailed logs
   python scripts/run_all.py --help             # Show options
@@ -127,6 +128,7 @@ def check_output_files() -> dict:
         "processed_json": bool((DATA_OUTPUT / "processed_products.json").exists()),
         "supplier_info": (DATA_OUTPUT / "supplier_info.json").exists(),
         "enriched_products": (DATA_OUTPUT / "enriched_products.json").exists(),
+        "categorized_products": (DATA_OUTPUT / "categorized_products.json").exists(),
         "images_dir": (DATA_OUTPUT / "images").exists(),
         "final_products": (DATA_OUTPUT / "final_products.json").exists(),
     }
@@ -167,9 +169,9 @@ Examples:
     
     parser.add_argument(
         "--stop-after",
-        type=int,
-        default=4,
-        choices=[1, 2, 3, 4],
+        type=str,
+        default="4",
+        choices=["1", "2", "3", "3.5", "4"],
         help="Stop after this step (default: 4 = all steps)"
     )
     
@@ -204,14 +206,18 @@ Examples:
     # Run steps
     results = []
     steps = [
-        (1, "1_sanitize.py", "CSV Sanitization"),
-        (2, "2_scrape.py", "Supplier Scraping"),
-        (3, "3_process_images.py", "Image Processing"),
-        (4, "4_generate_ai.py", "AI Enrichment"),
+        ("1", "1_sanitize.py", "CSV Sanitization"),
+        ("2", "2_scrape.py", "Supplier Scraping"),
+        ("3", "3_process_images.py", "Image Processing"),
+        ("3.5", "3.5_categorize.py", "AI Categorization"),
+        ("4", "4_generate_ai.py", "AI Enrichment"),
     ]
     
+    # Convert stop_after to comparable value
+    stop_after_val = float(args.stop_after)
+    
     for step_num, script, title in steps:
-        if step_num > args.stop_after:
+        if float(step_num) > stop_after_val:
             break
         
         success, msg = run_script(step_num, script, title, args.verbose)
