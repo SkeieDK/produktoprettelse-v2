@@ -177,8 +177,11 @@ def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str,
     color = product.get("color") or product.get("Color", "Unknown")
     size = product.get("size") or product.get("FIELD_20", "Unknown")
     # Derive category from available structured fields if not explicitly set
+    # Prefer AI-recommended category if present
     category = (
-        product.get("category")
+        product.get("recommended_category")
+        or product.get("recommendedCategory")
+        or product.get("category")
         or product.get("BunzlItemSubGroup")
         or product.get("BunzlItemMainGroup")
         or "Unknown"

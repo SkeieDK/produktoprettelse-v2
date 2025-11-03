@@ -136,12 +136,15 @@ def atomic_write_json(file_path, data):
 def process_images(logger, config):
     """
     Process images from supplier_info.json:
-    1. Read supplier_info.json
-    2. Copy images to data/output/images/
-    3. Update JSON with relative paths
-    4. Write to enriched_products.json
+    1. Read supplier_info.json (scraped data)
+    2. Load original processed products for metadata enrichment
+    3. Merge processed metadata into supplier data
+    4. Copy images to data/output/images/
+    5. Update JSON with relative paths
+    6. Write to enriched_products.json
     """
     output_dir = Path(config["paths"]["output"])
+    cache_dir = Path(config["paths"]["cache"])
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
     
@@ -149,6 +152,27 @@ def process_images(logger, config):
     if not supplier_info_path.exists():
         logger.error(f"Input file not found: {supplier_info_path}")
         return False
+    
+    # Load original processed products for metadata
+    processed_products_path = cache_dir / "processed_products.json"
+    processed_by_prod_num = {}
+    if processed_products_path.exists():
+        logger.info(f"Loading processed products metadata: {processed_products_path}")
+        try:
+            with open(processed_products_path, 'r', encoding='utf-8') as f:
+                processed_products = json.load(f)
+                if isinstance(processed_products, dict):
+                    processed_products = [processed_products]
+                # Index by PROD_NUM for fast lookup
+                for prod in processed_products:
+                    prod_num = prod.get("PROD_NUM")
+                    if prod_num:
+                        processed_by_prod_num[prod_num] = prod
+                logger.info(f"  Indexed {len(processed_by_prod_num)} products by PROD_NUM")
+        except Exception as e:
+            logger.warning(f"  Could not load processed products: {e}")
+    else:
+        logger.warning(f"Processed products file not found: {processed_products_path}")
     
     logger.info(f"Reading supplier info: {supplier_info_path}")
     with open(supplier_info_path, 'r', encoding='utf-8') as f:
@@ -166,6 +190,16 @@ def process_images(logger, config):
     for idx, product in enumerate(supplier_data, 1):
         product_num = product.get("product_number", f"product_{idx}")
         logger.info(f"[{idx}/{len(supplier_data)}] {product_num}")
+        
+        # Merge metadata from original processed data
+        if product_num in processed_by_prod_num:
+            processed_row = processed_by_prod_num[product_num]
+            # Add all metadata fields from processed (don't override existing supplier data)
+            for key, value in processed_row.items():
+                # Skip keys that are already in supplier_data (keep scraped data)
+                if key not in product or key in ["PROD_NUM", "PROD_NUM_old"]:
+                    product[key] = value
+            logger.debug(f"  Merged metadata from processed products")
         
         if "images" not in product or not product["images"]:
             logger.debug(f"  No images for {product_num}")
