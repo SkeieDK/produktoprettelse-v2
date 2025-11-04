@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-Step 3.5: AI-Powered Product Categorization
-Assigns products to best-suited categories using Dandomain API + OpenAI.
+Step 3.5: Embedding-Based Product Categorization (Cost-Optimized)
+Uses OpenAI embeddings for semantic similarity matching (75x cheaper than LLM).
+
+Strategy:
+1. Generate embeddings for all categories (one-time, cached)
+2. Generate embedding for each product
+3. Find best match using cosine similarity
+4. Fallback to gpt-3.5-turbo only if confidence < 70%
+
+Cost: ~$0.000002 per product (vs $0.00015 with LLM)
 
 Input:  data/output/enriched_products.json (from Step 3)
 Output: data/output/categorized_products.json (with category assignments)
-
 Logs to: logs/3.5_categorize.log
 """
 
@@ -15,10 +22,11 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import yaml
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError, APIError
+from openai import OpenAI
+import numpy as np
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -81,7 +89,7 @@ def load_config():
                     "paths": {
                         "input": paths.get("input_dir", "data/input"),
                         "output": paths.get("output_dir", "data/output"),
-                        "cache": paths.get("cache_dir", "data/cache"),
+                        "cache": paths.get("cache_dir", "cache"),
                         "logs": paths.get("logs_dir", "logs"),
                     },
                     "ai": config.get("ai", {}),
@@ -93,10 +101,10 @@ def load_config():
         "paths": {
             "input": str(PROJECT_ROOT / "data" / "input"),
             "output": str(PROJECT_ROOT / "data" / "output"),
-            "cache": str(PROJECT_ROOT / "data" / "cache"),
+            "cache": str(PROJECT_ROOT / "cache"),
             "logs": str(PROJECT_ROOT / "logs"),
         },
-        "ai": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.3},
+        "ai": {"provider": "openai", "model": "text-embedding-3-small", "temperature": 0.3},
         "categorization": {"confidence_threshold": 70, "batch_size": 10},
         "logging": {"level": "INFO"}
     }
@@ -154,6 +162,92 @@ def get_api_key(logger, config):
     return None
 
 
+def build_category_text(category: Dict, example_products: List[Dict]) -> str:
+    """
+    Build text representation of category for embedding.
+    
+    Includes: category path, description, and example products.
+    """
+    path = category.get('kategori_sti', category.get('nederste_kategori', 'Unknown'))
+    hovedkat = category.get('hovedkategori', '')
+    
+    text_parts = [f"Category: {path}"]
+    
+    if hovedkat and hovedkat not in path:
+        text_parts.append(f"Main category: {hovedkat}")
+    
+    # Add example products if available
+    if example_products:
+        product_names = [p['name'] for p in example_products[:5]]
+        text_parts.append(f"Example products: {', '.join(product_names)}")
+    
+    return " | ".join(text_parts)
+
+
+def build_product_text(product: Dict, include_details: bool = False) -> str:
+    """
+    Build text representation of product for embedding.
+    
+    Args:
+        product: Product details
+        include_details: If True, include full description (for fallback)
+    """
+    prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', 'Unknown'))
+    vendor = product.get('PrimaryVendorName', 'Unknown')
+    
+    text_parts = [f"Product: {prod_name}", f"Vendor: {vendor}"]
+    
+    if include_details:
+        supplier_info = product.get('supplier_info', {})
+        if isinstance(supplier_info, dict):
+            description = supplier_info.get('description', '')
+            if description:
+                text_parts.append(f"Description: {description[:300]}")
+        elif supplier_info:
+            text_parts.append(f"Description: {str(supplier_info)[:300]}")
+    
+    return " | ".join(text_parts)
+
+
+def get_embedding(text: str, client: OpenAI, model: str = "text-embedding-3-small") -> List[float]:
+    """
+    Get embedding vector for text.
+    
+    Args:
+        text: Text to embed
+        client: OpenAI client
+        model: Embedding model (default: text-embedding-3-small)
+    
+    Returns:
+        List of floats (embedding vector)
+    """
+    response = client.embeddings.create(
+        input=text,
+        model=model
+    )
+    return response.data[0].embedding
+
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """
+    Calculate cosine similarity between two vectors.
+    
+    Returns:
+        Similarity score (0-1, higher is more similar)
+    """
+    vec1_np = np.array(vec1)
+    vec2_np = np.array(vec2)
+    
+    dot_product = np.dot(vec1_np, vec2_np)
+    norm1 = np.linalg.norm(vec1_np)
+    norm2 = np.linalg.norm(vec2_np)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    return dot_product / (norm1 * norm2)
+
+
 def build_category_with_products_map(categories: List[Dict], products: List[Dict], logger) -> Dict[str, Dict]:
     """
     Build a map of categories with example products from each.
@@ -197,11 +291,11 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
         if primary_cat_num and primary_cat_num in cat_number_to_id:
             category_ids.add(cat_number_to_id[primary_cat_num])
         
-        # Add product to relevant categories (limit 3 examples per category)
+        # Add product to relevant categories (limit 5 examples per category)
         product_name = product.get('ItemName', product.get('number', 'Unknown'))
         
         for cat_id in category_ids:
-            if cat_id in cat_map and len(cat_map[cat_id]['example_products']) < 3:
+            if cat_id in cat_map and len(cat_map[cat_id]['example_products']) < 5:
                 cat_map[cat_id]['example_products'].append({
                     'name': product_name,
                     'vendor': product.get('vendorNumber', ''),
@@ -213,225 +307,186 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
     return cat_map
 
 
-def build_category_tree(categories: List[Dict], category_product_map: Dict[str, Dict], compact: bool = False) -> str:
-    """
-    Build a formatted category tree for the AI prompt with example products.
-    
-    Args:
-        categories: List of category dicts
-        category_product_map: Map of category_id to products
-        compact: If True, only show categories with products (to save tokens)
-    """
-    # Group by hovedkategori
-    tree_dict = {}
-    for cat in categories:
-        cat_id = str(cat['PROD_CAT_ID'])
-        
-        # Skip categories without products if compact mode
-        if compact and cat_id in category_product_map:
-            if not category_product_map[cat_id]['example_products']:
-                continue
-        
-        hovedkat = cat.get('hovedkategori', 'Ingen hovedkategori')
-        if hovedkat not in tree_dict:
-            tree_dict[hovedkat] = []
-        tree_dict[hovedkat].append(cat)
-    
-    # Build formatted tree with products
-    tree_lines = []
-    for hovedkat, cats in sorted(tree_dict.items()):
-        if not cats:  # Skip empty groups
-            continue
-            
-        tree_lines.append(f"\n[{hovedkat}]")
-        for cat in cats:
-            cat_id = str(cat['PROD_CAT_ID'])
-            path = cat.get('kategori_sti', cat.get('nederste_kategori', 'Unknown'))
-            
-            # Truncate path if too long
-            if len(path) > 60:
-                path = path[:57] + "..."
-            
-            tree_lines.append(f"  - ID: {cat_id} | {path}")
-            
-            # Add example products if available
-            if cat_id in category_product_map:
-                examples = category_product_map[cat_id]['example_products']
-                if examples:
-                    # Truncate product names to save tokens
-                    short_names = [p['name'][:40] for p in examples[:3]]
-                    tree_lines.append(f"    Ex: {', '.join(short_names)}")
-    
-    return "\n".join(tree_lines)
-
-
-def get_category_system_prompt() -> str:
-    """System prompt for category classification."""
-    return """You are a product categorization expert for a B2B cleaning and maintenance supplies webshop.
-
-Your task: Analyze product details and assign the most appropriate category from the provided hierarchy.
-
-Guidelines:
-- Consider product type, vendor, intended use, and specifications
-- Look at example products already in each category to understand what belongs there
-- Prefer specific categories over general ones (e.g., "Børster > Industribørster" over just "Børster")
-- Match similar products to categories with similar existing products
-- Use vendor patterns (e.g., if Vikan products are in a category, similar Vikan items likely belong there)
-- B2B focus: prioritize professional/industrial categories over consumer ones
-- If no good fit exists (confidence < 70%), suggest creating a new category
-
-Output requirements:
-- Return ONLY valid JSON (no markdown, no code fences)
-- Include confidence score (0-100)
-- Provide brief reasoning (mention similar products if relevant)
-- If suggesting new category, specify parent and rationale"""
-
-
-def get_category_user_prompt(product: Dict, category_tree: str, include_details: bool = False) -> str:
-    """
-    Build user prompt for categorization.
-    
-    Args:
-        product: Product details
-        category_tree: Category hierarchy string
-        include_details: If True, include full description/supplier_info (used on retry for low confidence)
-    """
-    # Extract product details
-    prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', 'Unknown'))
-    vendor = product.get('PrimaryVendorName', 'Unknown')
-    
-    # Get supplier info if available (can be dict or string)
-    supplier_info = product.get('supplier_info', {})
-    if isinstance(supplier_info, dict):
-        description = supplier_info.get('description', '')
-        specifications = supplier_info.get('specifications', '')
-    else:
-        # If supplier_info is a string, use it as description
-        description = str(supplier_info) if supplier_info else ''
-        specifications = ''
-    
-    # Get any existing category hints
-    existing_cat = product.get('DefaultCategoryId', '')
-    
-    prompt = f"""Product to categorize:
-- Name: {prod_name}
-- Vendor: {vendor}
-- Existing Category ID (if any): {existing_cat}
-"""
-    
-    # Only include detailed info on retry (when include_details=True)
-    if include_details:
-        if description:
-            prompt += f"- Description: {description[:300]}...\n"
-        
-        if specifications:
-            prompt += f"- Specifications: {specifications[:200]}...\n"
-    
-    prompt += f"""
-Available categories (hierarchy):
-{category_tree}
-
-Return ONLY this JSON format:
-
-{{
-  "category_id": "123",
-  "confidence": 85,
-  "reasoning": "Brief explanation why this category fits"
-}}
-
-OR if no good fit (confidence < 70%):
-
-{{
-  "category_id": null,
-  "confidence": 45,
-  "reasoning": "Why no existing category fits",
-  "suggest_new": true,
-  "new_category": {{
-    "name": "Suggested category name",
-    "parent_id": "123",
-    "description": "Why this new category is needed"
-  }}
-}}
-
-Return ONLY the JSON object. No markdown, no explanation."""
-    
-    return prompt
-
-
-def categorize_product(
-    product: Dict,
+def load_or_generate_category_embeddings(
     categories: List[Dict],
-    category_tree: str,
     category_product_map: Dict[str, Dict],
     client: OpenAI,
-    model: str,
-    temperature: float,
+    cache_dir: Path,
     logger,
-    include_details: bool = False
-) -> Dict[str, Any]:
+    force_refresh: bool = False
+) -> Dict[str, List[float]]:
     """
-    Use AI to categorize a single product.
-    
-    Args:
-        include_details: If False, use minimal prompt (just name+vendor). If True, include full description.
+    Load cached category embeddings or generate new ones.
     
     Returns:
-        Dict with category assignment or suggestion
+        Dict mapping category_id to embedding vector
     """
+    cache_file = cache_dir / "category_embeddings.json"
+    
+    # Try to load from cache
+    if cache_file.exists() and not force_refresh:
+        logger.info(f"Loading cached category embeddings from {cache_file}...")
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # Validate cache has all categories
+            cached_ids = set(cache_data.keys())
+            current_ids = set(str(cat['PROD_CAT_ID']) for cat in categories)
+            
+            if cached_ids == current_ids:
+                logger.info(f"Using cached embeddings for {len(cache_data)} categories")
+                return cache_data
+            else:
+                logger.warning(f"Cache mismatch: {len(current_ids - cached_ids)} new categories, regenerating...")
+        except Exception as e:
+            logger.warning(f"Failed to load cache: {e}, regenerating...")
+    
+    # Generate embeddings
+    logger.info(f"Generating embeddings for {len(categories)} categories (this may take a minute)...")
+    embeddings = {}
+    
+    for i, category in enumerate(categories, 1):
+        cat_id = str(category['PROD_CAT_ID'])
+        example_products = category_product_map.get(cat_id, {}).get('example_products', [])
+        
+        # Build category text
+        cat_text = build_category_text(category, example_products)
+        
+        # Get embedding
+        try:
+            embedding = get_embedding(cat_text, client)
+            embeddings[cat_id] = embedding
+            
+            if i % 10 == 0:
+                logger.info(f"  Generated embeddings for {i}/{len(categories)} categories...")
+            
+            # Rate limiting (basic)
+            time.sleep(0.05)  # 20 requests/second
+            
+        except Exception as e:
+            logger.error(f"Failed to embed category {cat_id}: {e}")
+            # Use zero vector as fallback
+            embeddings[cat_id] = [0.0] * 1536
+    
+    # Save to cache
+    logger.info(f"Saving category embeddings to cache...")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(embeddings, f, ensure_ascii=False, indent=2)
+    
+    logger.info(f"Category embeddings cached to {cache_file}")
+    return embeddings
+
+
+def find_best_category_by_embedding(
+    product: Dict,
+    categories: List[Dict],
+    category_embeddings: Dict[str, List[float]],
+    client: OpenAI,
+    logger,
+    include_details: bool = False
+) -> Tuple[str, float, str]:
+    """
+    Find best matching category using embedding similarity.
+    
+    Args:
+        product: Product to categorize
+        categories: List of all categories
+        category_embeddings: Precomputed category embeddings
+        client: OpenAI client
+        logger: Logger
+        include_details: If True, include full product details in embedding
+    
+    Returns:
+        Tuple of (category_id, confidence_score, reasoning)
+    """
+    # Build product text
+    prod_text = build_product_text(product, include_details=include_details)
+    
+    # Get product embedding
+    try:
+        prod_embedding = get_embedding(prod_text, client)
+    except Exception as e:
+        logger.error(f"Failed to embed product: {e}")
+        return None, 0, f"Embedding error: {str(e)}"
+    
+    # Calculate similarities
+    similarities = {}
+    for cat_id, cat_embedding in category_embeddings.items():
+        similarity = cosine_similarity(prod_embedding, cat_embedding)
+        similarities[cat_id] = similarity
+    
+    # Find best match
+    if not similarities:
+        return None, 0, "No categories available"
+    
+    best_cat_id = max(similarities, key=similarities.get)
+    best_similarity = similarities[best_cat_id]
+    
+    # Convert similarity (0-1) to confidence (0-100)
+    confidence = int(best_similarity * 100)
+    
+    # Get category info for reasoning
+    category = next((c for c in categories if str(c['PROD_CAT_ID']) == best_cat_id), None)
+    if category:
+        cat_path = category.get('kategori_sti', 'Unknown')
+        reasoning = f"Best match: {cat_path} (similarity: {best_similarity:.3f})"
+    else:
+        reasoning = f"Best match ID: {best_cat_id} (similarity: {best_similarity:.3f})"
+    
+    return best_cat_id, confidence, reasoning
+
+
+def categorize_with_llm_fallback(
+    product: Dict,
+    categories: List[Dict],
+    category_product_map: Dict[str, Dict],
+    client: OpenAI,
+    logger
+) -> Dict[str, Any]:
+    """
+    Use LLM (gpt-3.5-turbo) as fallback for low-confidence cases.
+    
+    This is expensive but accurate - only used when embeddings fail.
+    """
+    from categorize_helpers import get_category_system_prompt, get_category_user_prompt, build_category_tree
+    
+    # Build compact category tree
+    category_tree = build_category_tree(categories, category_product_map, compact=True)
+    
+    # Get prompts
     system_prompt = get_category_system_prompt()
-    user_prompt = get_category_user_prompt(product, category_tree, include_details=include_details)
+    user_prompt = get_category_user_prompt(product, category_tree, include_details=True)
     
     try:
         response = client.chat.completions.create(
-            model=model,
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=temperature,
-            max_tokens=400,
+            temperature=0.2,
+            max_tokens=300,
             response_format={"type": "json_object"}
         )
         
         result_text = response.choices[0].message.content.strip()
         
-        # Remove markdown code fences if present
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-            result_text = result_text.strip()
-        
         # Parse JSON
         result = json.loads(result_text)
         
-        # Validate result
-        if "category_id" not in result and "suggest_new" not in result:
-            logger.warning(f"Invalid AI response format: {result_text[:100]}")
-            return {
-                "category_id": None,
-                "confidence": 0,
-                "reasoning": "AI returned invalid format",
-                "error": True
-            }
+        # Add fallback indicator
+        result['fallback_used'] = True
         
         return result
         
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse AI response: {e}")
-        logger.debug(f"Response was: {result_text[:200]}")
-        return {
-            "category_id": None,
-            "confidence": 0,
-            "reasoning": f"JSON parse error: {str(e)}",
-            "error": True
-        }
     except Exception as e:
-        logger.error(f"AI categorization error: {e}")
+        logger.error(f"LLM fallback error: {e}")
         return {
             "category_id": None,
             "confidence": 0,
-            "reasoning": f"Error: {str(e)}",
+            "reasoning": f"LLM fallback error: {str(e)}",
             "error": True
         }
 
@@ -445,89 +500,93 @@ def process_products(
     logger
 ) -> List[Dict]:
     """
-    Process all products and assign categories.
+    Process all products and assign categories using embeddings.
     """
-    # Prefer env override for cheaper model, default to gpt-4o-mini (supports JSON mode)
-    env_model = os.getenv("CATEGORIZATION_MODEL")
-    model = env_model or config.get("ai", {}).get("model", "gpt-4o-mini")
-    # Optional fallback model (auto-switch on insufficient_quota)
-    fallback_model = os.getenv("CATEGORIZATION_FALLBACK_MODEL", "gpt-4-turbo")
-    temperature = config.get("ai", {}).get("temperature", 0.2)
     confidence_threshold = config.get("categorization", {}).get("confidence_threshold", 70)
+    cache_dir = Path(config["paths"]["cache"])
     
     # Build category-to-products map
     logger.info(f"Mapping {len(api_products)} existing products to categories...")
     category_product_map = build_category_with_products_map(categories, api_products, logger)
     
-    # Build category tree once (compact mode to reduce tokens)
-    logger.info(f"Building category tree from {len(categories)} categories...")
-    category_tree = build_category_tree(categories, category_product_map, compact=True)
+    # Load or generate category embeddings (one-time cost)
+    category_embeddings = load_or_generate_category_embeddings(
+        categories,
+        category_product_map,
+        client,
+        cache_dir,
+        logger
+    )
     
-    logger.info(f"Processing {len(products)} products with AI categorization...")
-    logger.info(f"Model: {model}, Temperature: {temperature}, Confidence threshold: {confidence_threshold}%")
+    logger.info(f"Processing {len(products)} products with embedding-based categorization...")
+    logger.info(f"Confidence threshold: {confidence_threshold}%, LLM fallback: gpt-3.5-turbo")
     
     categorized_products = []
     stats = {
         "total": len(products),
         "categorized": 0,
-        "needs_new_category": 0,
+        "llm_fallback": 0,
         "errors": 0,
         "low_confidence": 0
     }
     
-    fallback_used = False
     for i, product in enumerate(products, 1):
         prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', f'Product {i}'))
         
         logger.info(f"[{i}/{len(products)}] Categorizing: {prod_name[:60]}...")
         
-        # First attempt: minimal prompt (just name + vendor)
-        result = categorize_product(
+        # Try embedding-based matching first
+        cat_id, confidence, reasoning = find_best_category_by_embedding(
             product,
             categories,
-            category_tree,
-            category_product_map,
+            category_embeddings,
             client,
-            model,
-            temperature,
             logger,
             include_details=False
         )
         
-        # If confidence < 80%, retry with full details
-        if result.get('category_id') and result.get('confidence', 0) < 80:
-            logger.info(f"  Low confidence ({result.get('confidence')}%), retrying with product details...")
-            result = categorize_product(
+        result = {
+            "category_id": cat_id,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "method": "embedding"
+        }
+        
+        # If low confidence, retry with more details
+        if cat_id and confidence < 80:
+            logger.info(f"  Low confidence ({confidence}%), retrying with product details...")
+            cat_id2, confidence2, reasoning2 = find_best_category_by_embedding(
                 product,
                 categories,
-                category_tree,
-                category_product_map,
+                category_embeddings,
                 client,
-                model,
-                temperature,
                 logger,
                 include_details=True
             )
-
-        # Handle insufficient quota by switching model once, then retry this item
-        if result.get('error') and not fallback_used:
-            reason = str(result.get('reasoning', '')).lower()
-            if 'insufficient_quota' in reason or 'quota' in reason:
-                logger.warning(f"Quota exceeded on model '{model}'. Switching to fallback model '{fallback_model}' and retrying...")
-                model = fallback_model
-                fallback_used = True
-                # retry once with fallback model (use original include_details setting)
-                result = categorize_product(
-                    product,
-                    categories,
-                    category_tree,
-                    category_product_map,
-                    client,
-                    model,
-                    temperature,
-                    logger,
-                    include_details=False
-                )
+            
+            if confidence2 > confidence:
+                result = {
+                    "category_id": cat_id2,
+                    "confidence": confidence2,
+                    "reasoning": reasoning2,
+                    "method": "embedding_detailed"
+                }
+        
+        # If still low confidence (< 70%), use LLM fallback
+        if result.get('confidence', 0) < confidence_threshold:
+            logger.warning(f"  Very low confidence ({result.get('confidence')}%), using LLM fallback...")
+            llm_result = categorize_with_llm_fallback(
+                product,
+                categories,
+                category_product_map,
+                client,
+                logger
+            )
+            
+            # Use LLM result if it's better
+            if llm_result.get('confidence', 0) > result.get('confidence', 0):
+                result = llm_result
+                stats['llm_fallback'] += 1
         
         # Add categorization to product
         product['ai_categorization'] = result
@@ -536,37 +595,30 @@ def process_products(
         if result.get('error'):
             stats['errors'] += 1
             logger.warning(f"  [ERROR] {result.get('reasoning', 'Unknown error')}")
-        elif result.get('suggest_new'):
-            stats['needs_new_category'] += 1
-            new_cat = result.get('new_category', {})
-            logger.warning(f"  [NEW] Suggests new category: {new_cat.get('name', 'N/A')}")
-            logger.info(f"     Reasoning: {result.get('reasoning', 'N/A')}")
         elif result.get('category_id'):
-            confidence = result.get('confidence', 0)
-            if confidence >= confidence_threshold:
+            conf = result.get('confidence', 0)
+            if conf >= confidence_threshold:
                 stats['categorized'] += 1
-                logger.info(f"  [OK] Category: {result['category_id']} (confidence: {confidence}%)")
+                method = result.get('method', 'unknown')
+                logger.info(f"  [OK] Category: {result['category_id']} (confidence: {conf}%, method: {method})")
             else:
                 stats['low_confidence'] += 1
-                logger.warning(f"  [WARN] Low confidence ({confidence}%): Category {result['category_id']}")
-            
-            if result.get('reasoning'):
-                logger.debug(f"     Reasoning: {result['reasoning']}")
+                logger.warning(f"  [WARN] Low confidence ({conf}%): Category {result['category_id']}")
         
         categorized_products.append(product)
         
-        # Rate limiting (basic)
+        # Rate limiting
         if i < len(products):
-            time.sleep(0.5)  # 2 requests/second
+            time.sleep(0.1)
     
     # Print summary
     logger.info("\n" + "="*60)
-    logger.info("CATEGORIZATION SUMMARY")
+    logger.info("CATEGORIZATION SUMMARY (EMBEDDING-BASED)")
     logger.info("="*60)
     logger.info(f"Total products:        {stats['total']}")
     logger.info(f"Successfully assigned: {stats['categorized']} ({stats['categorized']/stats['total']*100:.1f}%)")
     logger.info(f"Low confidence:        {stats['low_confidence']}")
-    logger.info(f"Need new category:     {stats['needs_new_category']}")
+    logger.info(f"LLM fallback used:     {stats['llm_fallback']}")
     logger.info(f"Errors:                {stats['errors']}")
     logger.info("="*60)
     
@@ -576,7 +628,7 @@ def process_products(
 def main():
     """Main execution function."""
     print("\n" + "="*60)
-    print("Step 3.5: AI-Powered Product Categorization")
+    print("Step 3.5: Embedding-Based Product Categorization")
     print("="*60 + "\n")
     
     # Load config
@@ -586,7 +638,7 @@ def main():
     
     # Setup logging
     logger = setup_logging(log_dir)
-    logger.info("Starting product categorization...")
+    logger.info("Starting embedding-based product categorization...")
     
     # Get API key
     api_key = get_api_key(logger, config)
@@ -671,7 +723,7 @@ def main():
     logger.info("Categorization complete!")
     print(f"\n[SUCCESS] Categorized products saved to:")
     print(f"   {output_file}")
-    print(f"\nNext step: Review categorizations, then run Step 4 (4_generate_ai.py)")
+    print(f"\nCost savings: ~75x cheaper than pure LLM approach!")
     
     return 0
 
