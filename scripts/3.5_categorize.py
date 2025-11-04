@@ -287,8 +287,15 @@ Output requirements:
 - If suggesting new category, specify parent and rationale"""
 
 
-def get_category_user_prompt(product: Dict, category_tree: str) -> str:
-    """Build user prompt for categorization."""
+def get_category_user_prompt(product: Dict, category_tree: str, include_details: bool = False) -> str:
+    """
+    Build user prompt for categorization.
+    
+    Args:
+        product: Product details
+        category_tree: Category hierarchy string
+        include_details: If True, include full description/supplier_info (used on retry for low confidence)
+    """
     # Extract product details
     prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', 'Unknown'))
     vendor = product.get('PrimaryVendorName', 'Unknown')
@@ -310,14 +317,15 @@ def get_category_user_prompt(product: Dict, category_tree: str) -> str:
 - Name: {prod_name}
 - Vendor: {vendor}
 - Existing Category ID (if any): {existing_cat}
-
 """
     
-    if description:
-        prompt += f"- Description: {description[:300]}...\n"
-    
-    if specifications:
-        prompt += f"- Specifications: {specifications[:200]}...\n"
+    # Only include detailed info on retry (when include_details=True)
+    if include_details:
+        if description:
+            prompt += f"- Description: {description[:300]}...\n"
+        
+        if specifications:
+            prompt += f"- Specifications: {specifications[:200]}...\n"
     
     prompt += f"""
 Available categories (hierarchy):
@@ -358,16 +366,20 @@ def categorize_product(
     client: OpenAI,
     model: str,
     temperature: float,
-    logger
+    logger,
+    include_details: bool = False
 ) -> Dict[str, Any]:
     """
     Use AI to categorize a single product.
+    
+    Args:
+        include_details: If False, use minimal prompt (just name+vendor). If True, include full description.
     
     Returns:
         Dict with category assignment or suggestion
     """
     system_prompt = get_category_system_prompt()
-    user_prompt = get_category_user_prompt(product, category_tree)
+    user_prompt = get_category_user_prompt(product, category_tree, include_details=include_details)
     
     try:
         response = client.chat.completions.create(
@@ -377,7 +389,8 @@ def categorize_product(
                 {"role": "user", "content": user_prompt}
             ],
             temperature=temperature,
-            max_tokens=500
+            max_tokens=400,
+            response_format={"type": "json_object"}
         )
         
         result_text = response.choices[0].message.content.strip()
@@ -434,8 +447,12 @@ def process_products(
     """
     Process all products and assign categories.
     """
-    model = config.get("ai", {}).get("model", "gpt-4o-mini")
-    temperature = config.get("ai", {}).get("temperature", 0.3)
+    # Prefer env override for cheaper model, default to gpt-4o-nano
+    env_model = os.getenv("CATEGORIZATION_MODEL")
+    model = env_model or config.get("ai", {}).get("model", "gpt-4o-nano")
+    # Optional fallback model (auto-switch on insufficient_quota)
+    fallback_model = os.getenv("CATEGORIZATION_FALLBACK_MODEL", "gpt-4o-mini")
+    temperature = config.get("ai", {}).get("temperature", 0.2)
     confidence_threshold = config.get("categorization", {}).get("confidence_threshold", 70)
     
     # Build category-to-products map
@@ -458,12 +475,13 @@ def process_products(
         "low_confidence": 0
     }
     
+    fallback_used = False
     for i, product in enumerate(products, 1):
         prod_name = product.get('ORIGINAL_PROD_NAME', product.get('PROD_NAME', f'Product {i}'))
         
         logger.info(f"[{i}/{len(products)}] Categorizing: {prod_name[:60]}...")
         
-        # Get AI categorization
+        # First attempt: minimal prompt (just name + vendor)
         result = categorize_product(
             product,
             categories,
@@ -472,8 +490,44 @@ def process_products(
             client,
             model,
             temperature,
-            logger
+            logger,
+            include_details=False
         )
+        
+        # If confidence < 80%, retry with full details
+        if result.get('category_id') and result.get('confidence', 0) < 80:
+            logger.info(f"  Low confidence ({result.get('confidence')}%), retrying with product details...")
+            result = categorize_product(
+                product,
+                categories,
+                category_tree,
+                category_product_map,
+                client,
+                model,
+                temperature,
+                logger,
+                include_details=True
+            )
+
+        # Handle insufficient quota by switching model once, then retry this item
+        if result.get('error') and not fallback_used:
+            reason = str(result.get('reasoning', '')).lower()
+            if 'insufficient_quota' in reason or 'quota' in reason:
+                logger.warning(f"Quota exceeded on model '{model}'. Switching to fallback model '{fallback_model}' and retrying...")
+                model = fallback_model
+                fallback_used = True
+                # retry once with fallback model (use original include_details setting)
+                result = categorize_product(
+                    product,
+                    categories,
+                    category_tree,
+                    category_product_map,
+                    client,
+                    model,
+                    temperature,
+                    logger,
+                    include_details=False
+                )
         
         # Add categorization to product
         product['ai_categorization'] = result
@@ -481,20 +535,20 @@ def process_products(
         # Track stats
         if result.get('error'):
             stats['errors'] += 1
-            logger.warning(f"  ❌ Error: {result.get('reasoning', 'Unknown error')}")
+            logger.warning(f"  [ERROR] {result.get('reasoning', 'Unknown error')}")
         elif result.get('suggest_new'):
             stats['needs_new_category'] += 1
             new_cat = result.get('new_category', {})
-            logger.warning(f"  🆕 Suggests new category: {new_cat.get('name', 'N/A')}")
+            logger.warning(f"  [NEW] Suggests new category: {new_cat.get('name', 'N/A')}")
             logger.info(f"     Reasoning: {result.get('reasoning', 'N/A')}")
         elif result.get('category_id'):
             confidence = result.get('confidence', 0)
             if confidence >= confidence_threshold:
                 stats['categorized'] += 1
-                logger.info(f"  ✅ Category: {result['category_id']} (confidence: {confidence}%)")
+                logger.info(f"  [OK] Category: {result['category_id']} (confidence: {confidence}%)")
             else:
                 stats['low_confidence'] += 1
-                logger.warning(f"  ⚠️ Low confidence ({confidence}%): Category {result['category_id']}")
+                logger.warning(f"  [WARN] Low confidence ({confidence}%): Category {result['category_id']}")
             
             if result.get('reasoning'):
                 logger.debug(f"     Reasoning: {result['reasoning']}")
@@ -537,7 +591,7 @@ def main():
     # Get API key
     api_key = get_api_key(logger, config)
     if not api_key:
-        print("\n❌ Error: No OpenAI API key found!")
+        print("\n[ERROR] No OpenAI API key found!")
         print("   Set OPENAI_API_KEY in .env or config.yaml")
         return 1
     
@@ -549,7 +603,7 @@ def main():
     input_file = output_dir / "enriched_products.json"
     if not input_file.exists():
         logger.error(f"Input file not found: {input_file}")
-        print(f"\n❌ Error: {input_file} not found!")
+        print(f"\n[ERROR] {input_file} not found!")
         print("   Run Step 3 (3_process_images.py) first")
         return 1
     
@@ -571,7 +625,7 @@ def main():
             logger.info(f"Using cached category data ({cache_age:.1f} hours old)")
     except Exception as e:
         logger.error(f"Failed to load categories: {e}")
-        print(f"\n❌ Error loading categories: {e}")
+        print(f"\n[ERROR] Error loading categories: {e}")
         print("   Check API_KEY in .env and api_manager.py configuration")
         return 1
     
@@ -599,12 +653,12 @@ def main():
             logger
         )
     except KeyboardInterrupt:
-        logger.warning("\n⚠️ Interrupted by user")
-        print("\n⚠️ Categorization interrupted!")
+        logger.warning("\n[WARN] Interrupted by user")
+        print("\n[WARN] Categorization interrupted!")
         return 1
     except Exception as e:
         logger.error(f"Processing error: {e}", exc_info=True)
-        print(f"\n❌ Error during processing: {e}")
+        print(f"\n[ERROR] Error during processing: {e}")
         return 1
     
     # Save results
@@ -614,10 +668,10 @@ def main():
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(categorized_products, f, ensure_ascii=False, indent=2)
     
-    logger.info(f"✅ Categorization complete!")
-    print(f"\n✅ Success! Categorized products saved to:")
+    logger.info("Categorization complete!")
+    print(f"\n[SUCCESS] Categorized products saved to:")
     print(f"   {output_file}")
-    print(f"\n💡 Next step: Review categorizations, then run Step 4 (4_generate_ai.py)")
+    print(f"\nNext step: Review categorizations, then run Step 4 (4_generate_ai.py)")
     
     return 0
 
