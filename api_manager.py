@@ -306,10 +306,10 @@ class APIManager:
         """
         # Hent alle produkter
         all_products = self.get_all_products(use_cache)
-        print(f"📊 Processerer {len(all_products)} produkter...")
+        print(f"Processerer {len(all_products)} produkter...")
         # Process produkter
         processed_products = self.process_product_data(all_products)
-        print(f"✅ {len(processed_products)} produkter processeret")
+        print(f"Processeret: {len(processed_products)} produkter")
         return processed_products
     
     def _get_category_name(self, category: Dict) -> str:
@@ -406,15 +406,15 @@ class APIManager:
         # Hent alle kategorier
         all_categories = self.get_all_categories(use_cache)
         
-        print(f"📊 Processerer {len(all_categories)} kategorier...")
+        print(f"Processerer {len(all_categories)} kategorier...")
         
         # Filtrér baseret på regler
         filtered_categories = self.filter_categories(all_categories)
-        print(f"🔍 {len(filtered_categories)} kategorier efter filtrering")
+        print(f"Filtreret: {len(filtered_categories)} kategorier")
         
         # Process hierarki
         processed_categories = self.process_category_hierarchy(filtered_categories)
-        print(f"✅ {len(processed_categories)} kategorier processeret")
+        print(f"Processeret: {len(processed_categories)} kategorier")
         
         return processed_categories
     
@@ -440,7 +440,7 @@ class APIManager:
         for cache_file in cache_files:
             if cache_file.exists():
                 cache_file.unlink()
-                print(f"🗑️ Ryddet cache: {cache_file.name}")
+                print(f"Ryddet cache: {cache_file.name}")
     
     def get_cache_info(self) -> Dict[str, Any]:
         """Få information om cache status"""
@@ -507,11 +507,11 @@ if __name__ == "__main__":
         # Test kategori hentning
         categories = mgr.get_processed_categories()
         if categories:
-            print(f"\n📊 Eksempel kategori data:")
+            print(f"\nEksempel kategori data:")
             example = categories[0]
             for key, value in example.items():
                 print(f"  {key}: {value}")
-            print(f"\n📈 Kategori niveau fordeling:")
+            print(f"\nKategori niveau fordeling:")
             levels = {}
             for cat in categories:
                 level = cat['kategori_niveau']
@@ -522,10 +522,10 @@ if __name__ == "__main__":
         print(f"\n=== Test Produkter ===")
         products = mgr.get_processed_products(use_cache=True)
         if products:
-            print(f"✅ {len(products)} produkter hentet")
+            print(f"{len(products)} produkter hentet")
             # Vis eksempel produkt
             example_product = products[0]
-            print(f"\n📦 Eksempel produkt data:")
+            print(f"\nEksempel produkt data:")
             for key, value in list(example_product.items())[:10]:  # Vis kun første 10 felter
                 print(f"  {key}: {value}")
         # Vis cache status
@@ -533,9 +533,9 @@ if __name__ == "__main__":
         cache_info = mgr.get_cache_info()
         for filename, info in cache_info.items():
             if info['exists']:
-                print(f"✅ {filename}: {info['age_hours']:.1f}t gammel, {info['size_mb']:.1f}MB")
+                print(f"[OK] {filename}: {info['age_hours']:.1f}t gammel, {info['size_mb']:.1f}MB")
             else:
-                print(f"❌ {filename}: Ikke cached")
+                print(f"[X] {filename}: Ikke cached")
     except Exception as e:
         mgr = None
         try:
