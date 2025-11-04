@@ -56,6 +56,7 @@ if "pipeline_status" not in st.session_state:
         "Step 1 (Sanitize)": False,
         "Step 2 (Scrape)": False,
         "Step 3 (Images)": False,
+        "Step 3.5 (Kategorisering)": False,
         "Step 4 (AI)": False,
     }
 if "last_pipeline_run" not in st.session_state:
@@ -515,14 +516,14 @@ with tab1:
     )
     
     if mode == "🔄 Kør alle trin (fra CSV → AI)":
-        # Full pipeline - CSV through all 4 steps
-        st.write("**Køres i rækkefølge:** Sanitize → Scrape+Images → Process Images → AI Enrichment")
+        # Full pipeline - CSV through all 5 steps
+        st.write("**Køres i rækkefølge:** Sanitize → Scrape+Images → Process Images → Kategorisering → AI Enrichment")
         
         if st.button("▶️ Kør Alle Trin", use_container_width=True, key="run_all_steps"):
             st.info("⏳ Starter pipeline... (dette tager nogle minutter)")
             try:
                 result = subprocess.run(
-                    [sys.executable, str(SCRIPTS_DIR / "run_all.py"), "--stop-after", "4"],
+                    [sys.executable, str(SCRIPTS_DIR / "run_all.py"), "--stop-after", "3.5"],
                     cwd=str(PROJECT_ROOT),
                     capture_output=True,
                     text=True,
@@ -534,6 +535,7 @@ with tab1:
                         "Step 1 (Sanitize)": True,
                         "Step 2 (Scrape)": True,
                         "Step 3 (Images)": True,
+                        "Step 3.5 (Kategorisering)": True,
                         "Step 4 (AI)": True,
                     }
                     st.session_state.last_pipeline_run = datetime.now()
@@ -557,7 +559,7 @@ with tab1:
         with col_step:
             step_choice = st.radio(
                 "Trin:",
-                ["Step 1: Sanitize", "Step 2+3: Scrape & Process", "Step 4: AI Enrichment"],
+                ["Step 1: Sanitize", "Step 2+3: Scrape & Process", "Step 3.5: Kategorisering", "Step 4: AI Enrichment"],
                 key="step_choice"
             )
         
@@ -630,6 +632,34 @@ with tab1:
                             st.error(f"❌ Fejl: {error_safe}")
                 else:
                     st.warning("Ingen saniteret CSV fundet. Kør Step 1 først.")
+            
+            elif step_choice == "Step 3.5: Kategorisering":
+                st.write("*Input: JSON-fil med produkter (fra Step 3)*")
+                input_files = list(DATA_OUTPUT.glob("enriched_products.json"))
+                if input_files:
+                    st.info("📝 Anvender AI til at kategorisere produkter ud fra eksisterende kategorier")
+                    if st.button("▶️ Kør Step 3.5 (Kategorisering)", use_container_width=True, key="run_s35"):
+                        st.info(f"⏳ Kører Step 3.5 (Kategorisering)...")
+                        try:
+                            result = subprocess.run(
+                                [sys.executable, str(SCRIPTS_DIR / "3.5_categorize.py")],
+                                cwd=str(PROJECT_ROOT),
+                                capture_output=True,
+                                text=True,
+                                timeout=600
+                            )
+                            if result.returncode == 0:
+                                st.session_state.pipeline_status["Step 3.5 (Kategorisering)"] = True
+                                st.success("✅ Step 3.5 fuldført!")
+                            else:
+                                error_msg = result.stderr or result.stdout or "Ukendt fejl"
+                                error_safe = error_msg.encode('ascii', errors='replace').decode('ascii')
+                                st.error(f"❌ Fejl: {error_safe[:500]}")
+                        except Exception as e:
+                            error_safe = str(e).encode('ascii', errors='replace').decode('ascii')
+                            st.error(f"❌ Fejl: {error_safe}")
+                else:
+                    st.warning("Ingen produkter fundet. Kør Step 2+3 først.")
             
             else:  # Step 4: AI Enrichment
                 st.write("*Input: JSON-fil med produkter*")
