@@ -410,16 +410,18 @@ def find_similar_example(
     existing_products: list,
     cache_data: Dict[str, Any],
     client: OpenAI,
-    min_quality_score: float = 0.7
+    min_quality_score: float = 0.7,
+    golden_examples: Optional[Dict[str, list]] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Find the best similar product to use as an example.
     
     Strategy:
-    1. Filter existing products by quality_score >= min_quality_score
-    2. Check for manual approval override (approved_example field)
-    3. Prioritize same category_id
-    4. Use embedding similarity to find closest match
+    1. Check for golden examples in the current category (from UI)
+    2. Filter existing products by quality_score >= min_quality_score
+    3. Check for manual approval override (approved_example field)
+    4. Prioritize same category_id
+    5. Use embedding similarity to find closest match
     
     Args:
         logger: Logger instance
@@ -428,6 +430,7 @@ def find_similar_example(
         cache_data: Cached quality scores and embeddings
         client: OpenAI client for generating embeddings
         min_quality_score: Minimum quality threshold (default 0.7)
+        golden_examples: Dict mapping category_id to list of golden product_numbers
     
     Returns:
         Best matching product dict or None if no good match found
@@ -438,6 +441,17 @@ def find_similar_example(
     current_category = current_product.get("ai_categorization", {}).get("category_id")
     current_name = current_product.get("ORIGINAL_PROD_NAME", "")
     current_supplier = current_product.get("supplier_info", "")[:500]  # Truncate for embedding
+    
+    # Check for golden examples in this category (set from UI)
+    if golden_examples and current_category:
+        golden_nums = golden_examples.get(str(current_category), [])
+        if golden_nums:
+            logger.debug(f"  Found {len(golden_nums)} golden examples for category {current_category}")
+            # Find first available golden example from this category
+            for prod in existing_products:
+                if prod.get("product_number", "") in golden_nums:
+                    logger.debug(f"  Using golden example: {prod.get('product_number', '')}")
+                    return prod
     
     # Build search text for current product
     current_search_text = f"{current_name} {current_supplier}"
@@ -641,6 +655,20 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     cache_data = load_example_cache(cache_dir)
     logger.info(f"  Loaded cache: {len(cache_data.get('quality_scores', {}))} quality scores, {len(cache_data.get('embeddings', {}))} embeddings")
     
+    # Load golden examples from UI (if available)
+    golden_examples_path = cache_dir / "golden_examples.json"
+    golden_examples = {}
+    if golden_examples_path.exists():
+        try:
+            with open(golden_examples_path, 'r', encoding='utf-8') as f:
+                golden_examples = json.load(f)
+            logger.info(f"  Loaded golden examples: {sum(len(v) for v in golden_examples.values())} examples across {len(golden_examples)} categories")
+        except Exception as e:
+            logger.warning(f"  Could not load golden examples: {e}")
+            golden_examples = {}
+    else:
+        logger.debug(f"  No golden examples configured yet")
+    
     logger.info(f"Loading products: {enriched_path}")
     with open(enriched_path, 'r', encoding='utf-8') as f:
         products = json.load(f)
@@ -668,7 +696,8 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
                     existing_products=existing_products,
                     cache_data=cache_data,
                     client=openai_client,
-                    min_quality_score=0.7
+                    min_quality_score=0.7,
+                    golden_examples=golden_examples
                 )
                 if example_product:
                     example_name = example_product.get("ORIGINAL_PROD_NAME", "Unknown")[:40]

@@ -25,6 +25,8 @@ from datetime import datetime
 import pandas as pd
 from PIL import Image
 import time
+from typing import Optional, Dict, Any
+from dotenv import load_dotenv
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +35,11 @@ DATA_INPUT = PROJECT_ROOT / "data" / "input"
 DATA_OUTPUT = PROJECT_ROOT / "data" / "output"
 LOGS_DIR = PROJECT_ROOT / "logs"
 DATA_CACHE = PROJECT_ROOT / "data" / "cache"
+CACHE_DIR = PROJECT_ROOT / "cache"
+
+# Add scripts to path for imports
+sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # Create necessary directories
 DATA_INPUT.mkdir(parents=True, exist_ok=True)
@@ -348,6 +355,64 @@ def load_json_file(filepath):
         st.warning(f"Could not load {filepath}: {e}")
     return None
 
+def save_json_file(filepath, data):
+    """Save JSON file safely."""
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Could not save {filepath}: {e}")
+        return False
+
+def update_product_descriptions(product_number: str, desc_short: str, desc_long: str, searchwords: str, meta_desc: str) -> bool:
+    """
+    Update product descriptions and save to final_products.json.
+    
+    Args:
+        product_number: Product number to update
+        desc_short: Short description
+        desc_long: Long description
+        searchwords: Search keywords
+        meta_desc: Meta description
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        final_path = DATA_OUTPUT / "final_products.json"
+        if not final_path.exists():
+            st.error("final_products.json ikke fundet")
+            return False
+        
+        products = load_json_file(final_path)
+        if not products:
+            st.error("Kunne ikke læse produkter")
+            return False
+        
+        if isinstance(products, dict):
+            products = [products]
+        
+        # Find and update the product
+        for idx, prod in enumerate(products):
+            if prod.get("product_number", "") == product_number:
+                prod["DESC_SHORT"] = desc_short
+                prod["DESC_LONG"] = desc_long
+                prod["PROD_SEARCHWORD"] = searchwords
+                prod["META_DESCRIPTION"] = meta_desc
+                prod["manually_edited"] = True
+                products[idx] = prod
+                
+                # Save
+                return save_json_file(final_path, products)
+        
+        st.error(f"Produkt {product_number} ikke fundet")
+        return False
+        
+    except Exception as e:
+        st.error(f"Fejl ved opdatering: {str(e)}")
+        return False
+
 def get_latest_log_lines(n=20):
     """Get the latest n lines from the main log."""
     log_file = LOGS_DIR / "product_enrichment.log"
@@ -362,7 +427,7 @@ def get_process_status():
     # Use session state tracking - only show completed if actually run in this session
     return st.session_state.pipeline_status
 
-def display_product_card(product):
+def display_product_card(product, show_actions=False, product_index=None):
     """Display a single product card in light theme with image and details side-by-side."""
     # Get product number - extract just the number part
     prod_num_raw = product.get('product_number', 'N/A')
@@ -457,6 +522,103 @@ def display_product_card(product):
             with st.expander("🎯 SEO Metadata"):
                 st.markdown(f'<div class="product-description"><strong>Meta beskrivelse:</strong><br/>{product.get("META_DESCRIPTION", "")}</div>', 
                            unsafe_allow_html=True)
+        
+        # Action buttons (if enabled)
+        if show_actions and product_index is not None:
+            st.divider()
+            approved = product.get('approved_example')
+            
+            col_status, col_approve, col_regen = st.columns([2, 1, 1])
+            
+            with col_status:
+                if approved == True:
+                    st.success("✅ Godkendt eksempel")
+                else:
+                    st.info("⏸️ Ikke godkendt")
+            
+            with col_approve:
+                st.caption("Brug som inspiration")
+                if st.button("✅ Godkend", key=f"approve_card_{product_index}", use_container_width=True):
+                    product['approved_example'] = True
+                    final_products_file = DATA_OUTPUT / "final_products.json"
+                    products = load_json_file(final_products_file) or []
+                    # Find and update the product - use raw product number
+                    for p in products:
+                        if p.get('product_number') == prod_num_raw:
+                            p['approved_example'] = True
+                            break
+                    with open(final_products_file, 'w', encoding='utf-8') as f:
+                        json.dump(products, f, ensure_ascii=False, indent=2)
+                    st.success("Godkendt!")
+                    time.sleep(0.5)
+                    st.rerun()
+            
+            with col_regen:
+                st.caption("Rediger manuelt")
+                if st.button("✏️ Rediger", key=f"edit_card_{product_index}", use_container_width=True):
+                    st.session_state[f"show_edit_card_{product_index}"] = True
+                    st.rerun()
+            
+            # Edit interface
+            if st.session_state.get(f"show_edit_card_{product_index}", False):
+                st.markdown("#### ✏️ Rediger Produktbeskrivelser")
+                st.caption("Ændringer gemmes automatisk i final_products.json")
+                
+                # Get current values
+                current_short = product.get("DESC_SHORT", "")
+                current_long = product.get("DESC_LONG", "")
+                current_search = product.get("PROD_SEARCHWORD", "")
+                current_meta = product.get("META_DESCRIPTION", "")
+                
+                # Edit fields
+                edited_short = st.text_area(
+                    "Kort beskrivelse:",
+                    value=current_short,
+                    key=f"edit_short_{product_index}",
+                    height=80
+                )
+                
+                edited_long = st.text_area(
+                    "Fuld beskrivelse:",
+                    value=current_long,
+                    key=f"edit_long_{product_index}",
+                    height=200
+                )
+                
+                edited_search = st.text_input(
+                    "Søgeord (kommasepareret):",
+                    value=current_search,
+                    key=f"edit_search_{product_index}"
+                )
+                
+                edited_meta = st.text_input(
+                    "Meta beskrivelse (max 155 tegn):",
+                    value=current_meta,
+                    key=f"edit_meta_{product_index}",
+                    max_chars=155
+                )
+                
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    if st.button("💾 Gem Ændringer", key=f"save_edit_card_{product_index}", use_container_width=True):
+                        if update_product_descriptions(
+                            product_number=prod_num_raw,  # Use raw product number with " - Deaktiveret"
+                            desc_short=edited_short,
+                            desc_long=edited_long,
+                            searchwords=edited_search,
+                            meta_desc=edited_meta
+                        ):
+                            st.success("✅ Ændringer gemt!")
+                            st.session_state[f"show_edit_card_{product_index}"] = False
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Kunne ikke gemme ændringer")
+                
+                with col_cancel:
+                    if st.button("❌ Annuller", key=f"cancel_edit_card_{product_index}", use_container_width=True):
+                        st.session_state[f"show_edit_card_{product_index}"] = False
+                        st.rerun()
     
     # Close the product card
     st.markdown("</div>", unsafe_allow_html=True)
@@ -474,7 +636,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Kør", "⚙️ Status", "📊 Resultater", "📋 Logs"])
+tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Kør", "📊 Resultater", "🤖 AI Management", "📋 Logs"])
 
 # ============================================================================
 # TAB 1: UPLOAD & EXECUTE
@@ -703,36 +865,10 @@ with tab1:
         st.markdown(f"**{step}:** {status_badge}")
 
 # ============================================================================
-# TAB 2: PROCESS STATUS
+# TAB 2: RESULTS GALLERY
 # ============================================================================
 
 with tab2:
-    st.subheader("Processtatus")
-    
-    status = get_process_status()
-    
-    for i, (step, completed) in enumerate(status.items(), 1):
-        status_class = "status-complete" if completed else "status-pending"
-        status_text = "✅" if completed else "⏸️"
-        
-        st.markdown(f"""
-        <div class="step-card">
-            <span class="step-status {status_class}">{status_text} {step}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.divider()
-    st.subheader("🔍 Seneste Log Lines")
-    
-    log_content = get_latest_log_lines(30)
-    with st.expander("Vis log"):
-        st.code(log_content, language="plaintext")
-
-# ============================================================================
-# TAB 3: RESULTS GALLERY
-# ============================================================================
-
-with tab3:
     st.subheader("📊 Produktresultater")
     
     # Load final products
@@ -761,37 +897,12 @@ with tab3:
                     st.info(f"🔍 Fundet **{len(filtered_products)}** produkter")
                 
                 # Display products - all at once (infinite scroll via browser native scrolling)
-                for product in filtered_products:
-                    display_product_card(product)
+                for idx, product in enumerate(filtered_products):
+                    display_product_card(product, show_actions=True, product_index=idx)
                 
                 st.divider()
                 
-                # Export
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    json_str = json.dumps(filtered_products, ensure_ascii=False, indent=2)
-                    st.download_button(
-                        label="⬇️ Download som JSON",
-                        data=json_str,
-                        file_name=f"produkter_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    try:
-                        df = pd.DataFrame(filtered_products)
-                        csv = df.to_csv(index=False, encoding='utf-8-sig')
-                        st.download_button(
-                            label="⬇️ Download som CSV",
-                            data=csv,
-                            file_name=f"produkter_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-                    except Exception as e:
-                        st.error(f"Could not generate CSV: {e}")
+                # Export buttons removed per user request - not useful for workflow
         
         except Exception as e:
             st.error(f"❌ Fejl ved indlæsning af produkter: {e}")
@@ -803,29 +914,45 @@ with tab3:
 with tab4:
     st.subheader("📋 Logs")
     
-    # Log file selector
+    # Only show main pipeline step logs (not job logs or other debug logs)
     log_dir = Path(LOGS_DIR)
-    log_files = sorted(log_dir.glob("*.log"), key=lambda x: x.stat().st_mtime, reverse=True)
+    main_logs = [
+        "1_sanitize.log",
+        "2_scrape.log", 
+        "3_process_images.log",
+        "3.5_categorize.log",
+        "4_generate_ai.log"
+    ]
     
-    if log_files:
+    # Get existing log files in reverse order (newest operations last in list means newest step at top)
+    available_logs = []
+    for log_name in reversed(main_logs):  # Reverse so Step 4 shows first
+        log_path = log_dir / log_name
+        if log_path.exists():
+            available_logs.append(log_path)
+    
+    if available_logs:
         selected_log = st.selectbox(
             "Vælg logfil:",
-            log_files,
-            format_func=lambda x: f"{x.name} ({x.stat().st_mtime})"
+            available_logs,
+            format_func=lambda x: f"{x.name} ({x.stat().st_size // 1024} KB)"
         )
         
-        # Read log
+        # Read log and reverse lines to show newest first
         with open(selected_log, 'r', encoding='utf-8', errors='ignore') as f:
-            log_content = f.read()
+            log_content_lines = f.readlines()
+        
+        # Reverse to show newest entries at top
+        log_content_reversed = ''.join(reversed(log_content_lines))
+        log_content = ''.join(log_content_lines)  # Keep original for download
         
         # Statistics
-        lines = log_content.split('\n')
-        errors = sum(1 for line in lines if 'ERROR' in line or 'error' in line)
-        warnings = sum(1 for line in lines if 'WARNING' in line or 'warning' in line)
+        errors = sum(1 for line in log_content_lines if 'ERROR' in line or 'error' in line)
+        warnings = sum(1 for line in log_content_lines if 'WARNING' in line or 'warning' in line)
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Linjer", len(lines))
+            st.metric("Linjer", len(log_content_lines))
         with col2:
             st.metric("Fejl", errors)
         with col3:
@@ -833,9 +960,10 @@ with tab4:
         
         st.divider()
         
-        # Log display
+        # Log display - newest first
+        st.caption("📄 Viser nyeste loglinjer øverst")
         with st.expander("Vis fuldt log", expanded=True):
-            st.code(log_content, language="plaintext")
+            st.code(log_content_reversed, language="plaintext")
         
         # Download
         st.download_button(
@@ -848,3 +976,274 @@ with tab4:
     
     else:
         st.info("Ingen logs fundet endnu. Kør pipeline for at generere logs.")
+
+# ============================================================================
+# TAB 3: AI MANAGEMENT
+# ============================================================================
+
+with tab3:
+    st.subheader("🤖 AI Management")
+    
+    # Sub-tabs for different AI management functions
+    ai_tab1, ai_tab2 = st.tabs(["✏️ Prompt Editor", "⭐ Golden Examples"])
+    
+    # ========================================================================
+    # AI TAB 1: PROMPT EDITOR
+    # ========================================================================
+    with ai_tab1:
+        st.markdown("### Rediger AI Prompts")
+        st.info("📝 Rediger system- og brugerprompts der bruges til AI-generering i Step 4")
+        
+        # Load current prompts from ai_config.py
+        ai_config_file = SCRIPTS_DIR / "ai_config.py"
+        
+        if not os.path.exists(ai_config_file):
+            st.error("❌ Kan ikke finde ai_config.py")
+        else:
+            # Read the file
+            with open(ai_config_file, 'r', encoding='utf-8') as f:
+                ai_config_content = f.read()
+            
+            # Extract SYSTEM_PROMPT
+            import re
+            system_prompt_match = re.search(r'SYSTEM_PROMPT = """(.*?)"""', ai_config_content, re.DOTALL)
+            user_prompt_match = re.search(r'USER_PROMPT_TEMPLATE = """(.*?)"""', ai_config_content, re.DOTALL)
+            
+            current_system_prompt = system_prompt_match.group(1) if system_prompt_match else ""
+            current_user_prompt = user_prompt_match.group(1) if user_prompt_match else ""
+            
+            # Editable text areas
+            st.markdown("#### System Prompt")
+            st.caption("Denne prompt definerer AI'ens rolle og personlighed")
+            new_system_prompt = st.text_area(
+                "System Prompt:",
+                value=current_system_prompt,
+                height=200,
+                key="system_prompt_editor",
+                label_visibility="collapsed"
+            )
+            
+            st.divider()
+            
+            st.markdown("#### User Prompt Template")
+            st.caption("Denne template bruges til at generere beskrivelser. Brug {product_info} og {example_json} som placeholders.")
+            new_user_prompt = st.text_area(
+                "User Prompt Template:",
+                value=current_user_prompt,
+                height=300,
+                key="user_prompt_editor",
+                label_visibility="collapsed"
+            )
+            
+            st.divider()
+            
+            # Save button
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("💾 Gem Prompts", use_container_width=True):
+                    try:
+                        # Replace prompts in config file
+                        new_config = ai_config_content
+                        
+                        # Replace SYSTEM_PROMPT
+                        new_config = re.sub(
+                            r'SYSTEM_PROMPT = """.*?"""',
+                            f'SYSTEM_PROMPT = """{new_system_prompt}"""',
+                            new_config,
+                            flags=re.DOTALL
+                        )
+                        
+                        # Replace USER_PROMPT_TEMPLATE
+                        new_config = re.sub(
+                            r'USER_PROMPT_TEMPLATE = """.*?"""',
+                            f'USER_PROMPT_TEMPLATE = """{new_user_prompt}"""',
+                            new_config,
+                            flags=re.DOTALL
+                        )
+                        
+                        # Write back
+                        with open(ai_config_file, 'w', encoding='utf-8') as f:
+                            f.write(new_config)
+                        
+                        st.success("✅ Prompts gemt til ai_config.py!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Fejl ved gem: {e}")
+            
+            with col2:
+                if st.button("🔄 Reset til Original", use_container_width=True):
+                    st.warning("⚠️ Denne funktion er ikke implementeret endnu. Gem en backup manuelt!")
+    
+    # ========================================================================
+    # AI TAB 2: GOLDEN EXAMPLES
+    # ========================================================================
+    with ai_tab2:
+        st.markdown("### ⭐ Administrer Golden Examples")
+        st.info("📌 Vælg bedste eksempler for hver kategori - disse vil blive prioriteret over automatisk valg")
+        
+        # Load ALL products from API cache
+        products_cache_file = PROJECT_ROOT / "cache" / "products_cache.json"
+        categories_cache_file = PROJECT_ROOT / "cache" / "categories_cache.json"
+        golden_examples_file = DATA_CACHE / "golden_examples.json"
+        
+        if not os.path.exists(products_cache_file):
+            st.warning("❌ Ingen produkter fundet i cache. Kør API sync først.")
+        elif not os.path.exists(categories_cache_file):
+            st.warning("❌ Ingen kategorier fundet i cache. Kør API sync først.")
+        else:
+            try:
+                # Load all products from API
+                all_products = load_json_file(products_cache_file) or []
+                all_categories = load_json_file(categories_cache_file) or []
+                
+                # Load existing golden examples
+                golden_examples = load_json_file(golden_examples_file) or {}
+                
+                # Build category map (category number -> category info)
+                # API structure: categories have 'id' (internal) and 'number' (business key)
+                # Products reference categories via 'number' in DefaultCategoryId/PrimaryCategoryId
+                category_map = {}
+                
+                for cat in all_categories:
+                    cat_number = str(cat.get('number', ''))
+                    
+                    # Get category name from texts.items[0].name
+                    cat_name = 'Unknown'
+                    texts = cat.get('texts', {})
+                    if isinstance(texts, dict):
+                        items = texts.get('items', [])
+                        if items and len(items) > 0:
+                            cat_name = items[0].get('name', 'Unknown')
+                    
+                    if cat_number:
+                        category_map[cat_number] = {
+                            'name': cat_name,
+                            'number': cat_number,
+                            'product_count': 0
+                        }
+                
+                # Count products per category
+                for product in all_products:
+                    # Products use category_number in primaryCategoryId
+                    primary_cat_num = str(product.get('primaryCategoryId', ''))
+                    
+                    if primary_cat_num and primary_cat_num in category_map:
+                        category_map[primary_cat_num]['product_count'] += 1
+                
+                # Filter to only categories with products
+                categories_with_products = {
+                    cat_num: info for cat_num, info in category_map.items()
+                    if info['product_count'] > 0
+                }
+                
+                if not categories_with_products:
+                    st.warning("❌ Ingen kategorier med produkter fundet")
+                else:
+                    st.success(f"✓ Fandt {len(categories_with_products)} kategorier med produkter")
+                    
+                    # Category selector
+                    selected_category = st.selectbox(
+                        "Vælg kategori:",
+                        options=sorted(categories_with_products.keys()),
+                        format_func=lambda x: f"{categories_with_products[x]['name']} ({categories_with_products[x]['product_count']} produkter)"
+                    )
+                    
+                    # Get products in this category from ALL API products
+                    category_products = [
+                        p for p in all_products
+                        if str(p.get('primaryCategoryId', '')) == selected_category
+                    ]
+                    
+                    st.info(f"📊 **{len(category_products)} produkter** i denne kategori")
+                    
+                    if category_products:
+                        st.divider()
+                        st.markdown(f"#### Produkter i kategori: {categories_with_products[selected_category]['name']}")
+                        
+                        # Get current golden examples for this category
+                        current_golden = golden_examples.get(str(selected_category), [])
+                        
+                        # Load quality cache (if available)
+                        quality_cache = load_json_file(DATA_CACHE / "example_quality_cache.json") or {}
+                        quality_scores = quality_cache.get('quality_scores', {})
+                        
+                        # Display products with checkboxes
+                        for product in category_products[:50]:  # Limit to 50 for performance
+                            prod_num = product.get('number', 'Unknown')
+                            
+                            # Get product name and description from settings.items[0]
+                            prod_name = prod_num  # Default to number
+                            prod_desc = ""
+                            
+                            settings = product.get('settings', {})
+                            if isinstance(settings, dict):
+                                items = settings.get('items', [])
+                                if items and len(items) > 0:
+                                    first_setting = items[0]
+                                    prod_name = first_setting.get('name', prod_num)
+                                    prod_desc = (
+                                        first_setting.get('longDescription', '') or
+                                        first_setting.get('shortDescription', '') or
+                                        ''
+                                    )
+                            
+                            # Get quality score if available
+                            quality_score = quality_scores.get(prod_num, 0.0)
+                            
+                            # Check if currently golden
+                            is_golden = prod_num in current_golden
+                            
+                            # Display product with checkbox
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                checkbox_key = f"golden_{selected_category}_{prod_num}"
+                                is_selected = st.checkbox(
+                                    f"**{prod_name[:80]}** ({prod_num})",
+                                    value=is_golden,
+                                    key=checkbox_key
+                                )
+                                
+                                # Show description preview
+                                if prod_desc:
+                                    with st.expander("Vis beskrivelse"):
+                                        st.write(prod_desc[:500] + "..." if len(prod_desc) > 500 else prod_desc)
+                            
+                            with col2:
+                                if quality_score > 0:
+                                    st.metric("Kvalitet", f"{quality_score:.2f}")
+                                else:
+                                    st.caption("Ikke vurderet")
+                                
+                                if is_golden:
+                                    st.markdown("⭐ **Golden**")
+                                
+                                # Update golden examples list based on checkbox
+                                if is_selected and prod_num not in current_golden:
+                                    current_golden.append(prod_num)
+                                elif not is_selected and prod_num in current_golden:
+                                    current_golden.remove(prod_num)
+                        
+                        if len(category_products) > 50:
+                            st.info(f"ℹ️ Viser kun de første 50 produkter. Total: {len(category_products)}")
+                        
+                        st.divider()
+                        
+                        # Save button
+                        if st.button("💾 Gem Golden Examples", use_container_width=True):
+                            try:
+                                # Update golden examples
+                                golden_examples[str(selected_category)] = current_golden
+                                
+                                # Save to file
+                                with open(golden_examples_file, 'w', encoding='utf-8') as f:
+                                    json.dump(golden_examples, f, ensure_ascii=False, indent=2)
+                                
+                                st.success(f"✅ Gemt {len(current_golden)} golden examples for kategori {selected_category}!")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Fejl ved gem: {e}")
+                    
+            except Exception as e:
+                st.error(f"❌ Fejl ved indlæsning: {e}")

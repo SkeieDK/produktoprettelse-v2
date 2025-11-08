@@ -1,0 +1,453 @@
+{
+  "id": 0,
+  "number": "string",
+  "vendorNumber": "string",
+  "costPrice": 0,
+  "weight": 0,
+  "pictureLink": "string",
+  "createdDate": "2025-11-08T15:48:51.509Z",
+  "editedDate": "2025-11-08T15:48:51.509Z",
+  "stockCount": 0,
+  "stockLimit": 0,
+  "allowPreOrder": true,
+  "allowBackOrder": true,
+  "preOrderAvailabilityDate": "2025-11-08T15:48:51.509Z",
+  "backOrderAvailabilityDate": "2025-11-08T15:48:51.509Z",
+  "backOrderAvailabilityDays": 0,
+  "locationNumber": "string",
+  "barCodeNumber": "string",
+  "googleFeedCategory": "string",
+  "sortOrder": 0,
+  "minBuyAmount": 0,
+  "maxBuyAmount": 0,
+  "fileSaleLink": "string",
+  "isVariantMaster": true,
+  "variantMasterId": "string",
+  "edbPriserProductNumber": "string",
+  "editedBy": "string",
+  "defaultCategoryId": "string",
+  "createdBy": "string",
+  "modified": true,
+  "comments": "string",
+  "minBuyAmountB2B": 0,
+  "rateVariants": true,
+  "reviewVariants": true,
+  "isGiftCertificate": true,
+  "typeId": 0,
+  "correlationId": "string",
+  "salesCount": 0,
+  "primaryCategoryId": "string",
+  "showOnGoogleFeed": true,
+  "showOnFacebookFeed": true,
+  "showOnPricerunnerFeed": true,
+  "showOnKelkooFeed": true,
+  "isBundle": true,
+  "settings": {
+    "url": "string",
+    "items": [
+      {
+        "name": "string",
+        "shortDescription": "string",
+        "longDescription": "string",
+        "longDescription2": "string",
+        "keyWords": "string",
+        "sortOrder": 0,
+        "metaDescription": "string",
+        "expectedDeliveryTime": "string",
+        "expectedDeliveryTimeNotInStock": "string",
+        "techDocLink": "string",
+        "techDocLink2": "string",
+        "techDocLink3": "string",
+        "techDocLinkText": "string",
+        "techDocLinkText2": "string",
+        "techDocLinkText3": "string",
+        "pageTitle": "string",
+        "isHidden": true,
+        "isHiddenForMobile": true,
+        "showOnFrontPage": true,
+        "showAsNew": true,
+        "retailSalesPrice": 0,
+        "isToplistHidden": true,
+        "imageAltText": "string",
+        "rememberToBuyTextHeading": "string",
+        "rememberToBuyTextSubheading": "string",
+        "giftCertificatePdfBackgroundImage": "string",
+        "customField1": "string",
+        "customField2": "string",
+        "customField3": "string",
+        "customField4": "string",
+        "customField5": "string",
+        "customField6": "string",
+        "customField7": "string",
+        "customField8": "string",
+        "customField9": "string",
+        "customField10": "string",
+        "customField11": "string",
+        "customField12": "string",
+        "customField13": "string",
+        "customField14": "string",
+        "customField15": "string",
+        "customField16": "string",
+        "customField17": "string",
+        "customField18": "string",
+        "customField19": "string",
+        "customField20": "string",
+        "unitNumber": "string",
+        "periodHiddenId": "string",
+        "periodFrontPageId": "string",
+        "periodNewId": "string",
+        "urlName": "string",
+        "isExcludedFromFreeDeliveryLimit": true,
+        "languageId": 0,
+        "url": "string",
+        "periodHidden": {
+          "id": "string",
+          "title": "string",
+          "startDate": "2025-11-08T15:48:51.509Z",
+          "endDate": "2025-11-08T15:48:51.509Z",
+          "isDisabled": true
+        },
+        "periodNew": {
+          "id": "string",
+          "title": "string",
+          "startDate": "2025-11-08T15:48:51.509Z",
+          "endDate": "2025-11-08T15:48:51.509Z",
+          "isDisabled": true
+        },
+        "periodFrontPage": {
+          "id": "string",
+          "title": "string",
+          "startDate": "2025-11-08T15:48:51.509Z",
+          "endDate": "2025-11-08T15:48:51.509Z",
+          "isDisabled": true
+        },
+        "unit": {
+          "text": "string",
+          "unitNumber": "string",
+          "siteId": 0
+        }
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "media": {
+    "url": "string",
+    "items": [
+      {
+        "mediaUrl": "string",
+        "mime": "string",
+        "thumbnail": "string",
+        "sortOrder": 0,
+        "width": "string",
+        "height": "string",
+        "thumbnailWidth": "string",
+        "thumbnailHeight": "string",
+        "id": 0,
+        "translations": {
+          "url": "string",
+          "items": [
+            {
+              "alternate": "string",
+              "name": "string",
+              "siteId": 0,
+              "id": 0
+            }
+          ],
+          "hasMore": true,
+          "count": 0,
+          "correlationId": "string"
+        }
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "categories": {
+    "url": "string",
+    "items": [
+      {
+        "number": "string",
+        "b2BGroupId": "string",
+        "infoLayout": 0,
+        "listLayout": 0,
+        "customInfoLayout": 0,
+        "id": 0,
+        "customListLayout": 0,
+        "modified": true,
+        "editedDate": "2025-11-08T15:48:51.509Z",
+        "createdDate": "2025-11-08T15:48:51.509Z",
+        "texts": {
+          "url": "string",
+          "items": [
+            {
+              "name": "string",
+              "siteId": 0,
+              "hidden": true,
+              "sortOrder": 0,
+              "link": "string",
+              "description": "string",
+              "icon": "string",
+              "string": "string",
+              "image": "string",
+              "keywords": "string",
+              "metaDescription": "string",
+              "title": "string",
+              "hiddenMobile": true,
+              "urlName": "string",
+              "footer": "string",
+              "id": 0,
+              "categoryNumber": "string",
+              "url": "string"
+            }
+          ],
+          "hasMore": true,
+          "count": 0,
+          "correlationId": "string"
+        },
+        "segmentIds": [
+          "string"
+        ],
+        "parentIds": [
+          "string"
+        ],
+        "defaultParentId": "string"
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "manufacturers": {
+    "url": "string",
+    "items": [
+      {
+        "id": "string",
+        "name": "string",
+        "link": "string",
+        "warrantyNote": "string",
+        "logoLink": "string",
+        "openInNewWindow": true
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "prices": {
+    "url": "string",
+    "items": [
+      {
+        "specialOfferPeriodId": "string",
+        "unitPrice": 0,
+        "specialOfferPrice": 0,
+        "avance": 0,
+        "b2bGroupId": "string",
+        "quantity": 0,
+        "currencyCode": "string",
+        "isoCode": 0,
+        "period": {
+          "id": "string",
+          "title": "string",
+          "startDate": "2025-11-08T15:48:51.509Z",
+          "endDate": "2025-11-08T15:48:51.509Z",
+          "isDisabled": true
+        }
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "segments": {
+    "url": "string",
+    "items": [
+      {
+        "id": "string",
+        "options": {
+          "url": "string",
+          "items": [
+            {
+              "id": "string",
+              "siteId": 0,
+              "name": "string"
+            }
+          ],
+          "hasMore": true,
+          "count": 0,
+          "correlationId": "string"
+        }
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "relations": {
+    "url": "string",
+    "items": [
+      {
+        "relationId": 0,
+        "productNumber": "string",
+        "relatedType": 0,
+        "sortOrder": 0,
+        "relatedDisplayType": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "variants": {
+    "url": "string",
+    "items": [
+      {
+        "text": "string",
+        "sortOrder": 0,
+        "siteId": 0,
+        "imagePath": "string",
+        "id": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "productVariants": {
+    "url": "string",
+    "items": [
+      "string"
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "variantGroups": {
+    "url": "string",
+    "items": [
+      {
+        "id": 0,
+        "text": "string",
+        "selectText": "string",
+        "variants": {
+          "url": "string",
+          "items": [
+            {
+              "text": "string",
+              "sortOrder": 0,
+              "siteId": 0,
+              "imagePath": "string",
+              "id": 0
+            }
+          ],
+          "hasMore": true,
+          "count": 0,
+          "correlationId": "string"
+        },
+        "sortOrder": 0,
+        "isFreeText": true,
+        "siteId": 0,
+        "variantType": 0,
+        "selectorType": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "disabledVariants": {
+    "url": "string",
+    "items": [
+      {
+        "text": "string",
+        "sortOrder": 0,
+        "siteId": 0,
+        "imagePath": "string",
+        "id": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "tagValues": {
+    "url": "string",
+    "items": [
+      {
+        "sortOrder": 0,
+        "id": 0,
+        "translations": {
+          "url": "string",
+          "items": [
+            {
+              "text": "string",
+              "siteId": 0
+            }
+          ],
+          "hasMore": true,
+          "count": 0,
+          "correlationId": "string"
+        }
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "ratings": {
+    "url": "string",
+    "items": [
+      {
+        "customerId": "string",
+        "status": 0,
+        "date": "2025-11-08T15:48:51.510Z",
+        "rating": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "bundles": {
+    "url": "string",
+    "items": [
+      {
+        "id": 0,
+        "productNr": "string",
+        "quantity": 0,
+        "sortOrder": 0
+      }
+    ],
+    "hasMore": true,
+    "count": 0,
+    "correlationId": "string"
+  },
+  "type": {
+    "id": 0,
+    "name": "string",
+    "formula": [
+      {
+        "id": 0,
+        "productTypeGroupId": 0,
+        "siteId": 0,
+        "formula": "string"
+      }
+    ],
+    "typeVAT": [
+      {
+        "countryId": 0,
+        "vatPct": "string",
+        "siteId": 0
+      }
+    ],
+    "fields": [
+      {
+        "label": "string",
+        "number": 0,
+        "siteId": 0
+      }
+    ]
+  }
+}
