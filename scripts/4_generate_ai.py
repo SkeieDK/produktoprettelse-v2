@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """
 Step 4: AI-Powered Product Enrichment
-Generates product descriptions using OpenAI GPT API.
+Generates product descriptions using OpenAI with Agents SDK.
 
-Input:  data/output/enriched_products.json
+The Agents SDK transparently handles:
+- Chat Completions API for gpt-4o-mini, gpt-3.5-turbo
+- Responses API for gpt-5-nano, gpt-5-mini (no manual API switching needed)
+
+Hybrid Strategy:
+1. Primary model (configurable in ai_config.py): Fast, cost-effective
+2. Fallback model (configurable in ai_config.py): Better reasoning - used if:
+   - Confidence score < 70% (configurable)
+   - Description too short (< 50 chars)
+
+Model selection: Edit ai_config.py ENRICHMENT_PRIMARY_MODEL and ENRICHMENT_FALLBACK_MODEL
+Do NOT hardcode models here - always use ai_config.py as single source of truth.
+
+Input:  data/output/categorized_products.json (from Step 3.5)
 Output: data/output/final_products.json (with AI fields)
 
 Logs to: logs/4_generate_ai.log
@@ -13,12 +26,10 @@ import json
 import sys
 import logging
 import os
-import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 import yaml
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError, APIError
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +39,7 @@ from ai_config import (
     get_system_prompt,
     get_user_prompt,
     get_model_config,
+    ProductDescriptionAgent,
 )
 
 # Safe stream for console output (handles encoding errors)
@@ -97,7 +109,7 @@ def load_config():
             "cache": str(PROJECT_ROOT / "data" / "cache"),
             "logs": str(PROJECT_ROOT / "logs"),
         },
-        "ai": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.7},
+        "ai": {},
         "logging": {"level": "INFO"}
     }
 
@@ -107,21 +119,17 @@ def setup_logging(log_dir: Path, log_file_name: str = "4_generate_ai.log"):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / log_file_name
     
-    # Create formatter
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # File handler (UTF-8)
     file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
     file_handler.setFormatter(formatter)
     
-    # Console handler with SafeStream
     console_handler = SafeStreamHandler(SafeStream())
     console_handler.setFormatter(formatter)
     
-    # Configure root logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
@@ -133,19 +141,16 @@ def setup_logging(log_dir: Path, log_file_name: str = "4_generate_ai.log"):
 
 def get_api_key(logger, config):
     """Get OpenAI API key from .env, environment, or config."""
-    # Load .env file
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         load_dotenv(env_path)
         logger.debug(f"Loaded .env from {env_path}")
     
-    # Try environment variable first
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_API_KEY")
     if api_key:
         logger.info("Using OpenAI API key from environment (.env or system)")
         return api_key
     
-    # Try config file
     if config.get("ai", {}).get("api_key"):
         logger.info("Using OpenAI API key from config")
         return config["ai"]["api_key"]
@@ -154,129 +159,109 @@ def get_api_key(logger, config):
     return None
 
 
-def call_openai_api(logger, product: Dict[str, Any], client: OpenAI, model: str, temperature: float, max_retries: int = 3) -> Optional[Dict[str, Any]]:
-    """Call OpenAI API with retry logic using v1.0+ client."""
-    
-    # Extract fields from product (handles both enriched_products.json and _processed.json)
-    # Prefer human-friendly product name over internal codes
-    product_name = (
-        product.get("ORIGINAL_PROD_NAME")
-        or product.get("PROD_NUM_old")
-        or product.get("product_number")
-        or product.get("PROD_NUM")
-        or "Unknown"
-    )
-    # Strip status markers like " - Deaktiveret" if present
-    if isinstance(product_name, str) and " - Deaktiveret" in product_name:
-        product_name = product_name.replace(" - Deaktiveret", "").strip()
-    supplier_info = product.get("supplier_info", "")
-    product_url = product.get("product_url", "")
-    
-    # Extract metadata fields
-    brand = product.get("brand") or product.get("BrandID", "Unknown")
-    color = product.get("color") or product.get("Color", "Unknown")
-    size = product.get("size") or product.get("FIELD_20", "Unknown")
-    # Derive category from available structured fields if not explicitly set
-    # Prefer AI-recommended category if present
-    category = (
-        product.get("recommended_category")
-        or product.get("recommendedCategory")
-        or product.get("category")
-        or product.get("BunzlItemSubGroup")
-        or product.get("BunzlItemMainGroup")
-        or "Unknown"
-    )
-    packaging = product.get("packaging")
-    if not packaging:
-        # Choose packaging field based on DataAreaID
-        data_area = product.get("DataAreaID", "cc")
-        if data_area == "mln":
-            packaging = product.get("PackingInfoInStockUnit", "Unknown")
-        else:
-            packaging = product.get("SalesUnit_PackingInfo", "Unknown")
-    
-    certifications = product.get("certifications") or product.get("Certifications", "Unknown")
-    afgift = product.get("afgift") or product.get("FIELD_18") or 0
-    # Ensure afgift is numeric
+def call_agent_api(logger, product: Dict[str, Any], agent: ProductDescriptionAgent, system_prompt: str, fallback_agent: Optional[ProductDescriptionAgent] = None, quality_threshold: float = 0.70) -> Optional[Dict[str, Any]]:
+    """
+    Call AI agent (Agents SDK handles both Chat Completions and Responses API).
+    """
     try:
-        afgift = float(afgift) if afgift else 0
-    except (ValueError, TypeError):
-        afgift = 0
-    
-    # Include product notes if available
-    prod_notes = product.get("PROD_NOTES")
-    if prod_notes is None:
-        prod_notes = ""
-    if prod_notes:
-        supplier_info = f"{supplier_info}\n\nProdukt noter: {prod_notes}".strip()
-    
-    user_prompt = get_user_prompt(
-        product_name=product_name,
-        category=category,
-        brand=brand,
-        color=color,
-        size=size,
-        packaging=packaging,
-        certifications=certifications,
-        afgift=afgift,
-        supplier_info=supplier_info,
-        product_url=product_url
-    )
-    
-    system_prompt = get_system_prompt()
-    
-    for attempt in range(max_retries):
+        # Extract fields from product
+        product_name = (
+            product.get("ORIGINAL_PROD_NAME")
+            or product.get("PROD_NUM_old")
+            or product.get("product_number")
+            or product.get("PROD_NUM")
+            or "Unknown"
+        )
+        if isinstance(product_name, str) and " - Deaktiveret" in product_name:
+            product_name = product_name.replace(" - Deaktiveret", "").strip()
+        
+        supplier_info = product.get("supplier_info", "")
+        product_url = product.get("product_url", "")
+        brand = product.get("brand") or product.get("BrandID", "Unknown")
+        color = product.get("color") or product.get("Color", "Unknown")
+        size = product.get("size") or product.get("FIELD_20", "Unknown")
+        
+        category = (
+            product.get("recommended_category")
+            or product.get("recommendedCategory")
+            or product.get("category")
+            or product.get("BunzlItemSubGroup")
+            or product.get("BunzlItemMainGroup")
+            or "Unknown"
+        )
+        
+        packaging = product.get("packaging")
+        if not packaging:
+            data_area = product.get("DataAreaID", "cc")
+            if data_area == "mln":
+                packaging = product.get("PackingInfoInStockUnit", "Unknown")
+            else:
+                packaging = product.get("SalesUnit_PackingInfo", "Unknown")
+        
+        certifications = product.get("certifications") or product.get("Certifications", "Unknown")
+        afgift = product.get("afgift") or product.get("FIELD_18") or 0
         try:
-            logger.debug(f"  Calling OpenAI API (attempt {attempt + 1}/{max_retries})...")
-            
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=temperature,
-                max_tokens=1000
-            )
-            
-            # Extract JSON from response
-            response_text = response.choices[0].message.content.strip()
-            
-            # Remove markdown code blocks if present
-            if response_text.startswith("```"):
-                response_text = response_text.strip("`").replace("```json", "").replace("```", "").strip()
-            
-            # Parse JSON
-            ai_data = json.loads(response_text)
-            logger.debug(f"  ✓ API response parsed successfully")
-            return ai_data
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"  JSON parse error (attempt {attempt + 1}): {e}")
-            logger.debug(f"  Response was: {response_text[:200]}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # Exponential backoff
-            continue
-            
-        except RateLimitError:
-            logger.warning(f"  Rate limit hit (attempt {attempt + 1}), waiting...")
-            time.sleep(60)  # Wait 60s for rate limit
-            continue
-            
-        except APIError as e:
-            logger.error(f"  API error (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-            continue
-            
-        except Exception as e:
-            logger.error(f"  Unexpected error (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-            continue
-    
-    logger.error(f"  Failed after {max_retries} attempts")
-    return None
+            afgift = float(afgift) if afgift else 0
+        except (ValueError, TypeError):
+            afgift = 0
+        
+        prod_notes = product.get("PROD_NOTES", "")
+        if prod_notes:
+            supplier_info = f"{supplier_info}\n\nProdukt noter: {prod_notes}".strip()
+        
+        # Build user prompt
+        user_prompt = get_user_prompt(
+            product_name=product_name,
+            category=category,
+            brand=brand,
+            color=color,
+            size=size,
+            packaging=packaging,
+            certifications=certifications,
+            afgift=afgift,
+            supplier_info=supplier_info,
+            product_url=product_url
+        )
+        
+        logger.debug(f"  Calling agent ({agent.model})...")
+        
+        # Call agent (Agents SDK handles Chat Completions vs Responses API automatically)
+        response_text = agent.generate_descriptions(user_prompt, system_prompt)
+        
+        if not response_text:
+            logger.error(f"  Empty response from agent")
+            return None
+        
+        # Remove markdown code blocks if present
+        if response_text.startswith("```"):
+            response_text = response_text.strip("`").replace("```json", "").replace("```", "").strip()
+        
+        # Parse JSON
+        ai_data = json.loads(response_text)
+        logger.debug(f"  ✓ Agent response parsed successfully")
+        
+        # Check quality for fallback decision
+        confidence = ai_data.get("confidence", 0.95)
+        description = ai_data.get("DESC_LONG", "").strip()
+        
+        should_retry = (
+            confidence < quality_threshold or 
+            len(description) < 50
+        )
+        
+        if should_retry and fallback_agent:
+            logger.debug(f"  Quality check failed (confidence: {confidence}, desc_len: {len(description)})")
+            logger.info(f"  Retrying with fallback agent ({fallback_agent.model})...")
+            return call_agent_api(logger, product, fallback_agent, system_prompt, fallback_agent=None, quality_threshold=quality_threshold)
+        
+        return ai_data
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"  JSON parse error: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"  Agent error: {e}")
+        return None
 
 
 def atomic_write_json(file_path, data):
@@ -289,23 +274,18 @@ def atomic_write_json(file_path, data):
 
 def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     """
-    Read enriched_products.json (or custom file), enrich with AI descriptions, write final_products.json
+    Read categorized_products.json, enrich with AI descriptions, write final_products.json
     
-    Args:
-        logger: Logger instance
-        config: Configuration dict
-        input_file: Optional path to custom JSON input file. If not provided, uses default enriched_products.json
+    Uses Agents SDK which handles Chat Completions and Responses API transparently.
     """
     output_dir = Path(config["paths"]["output"])
     
-    # Determine input file
     if input_file:
         enriched_path = Path(input_file)
-        # Use as-is if absolute or if it exists as-is, otherwise try relative to output dir
         if not enriched_path.exists() and not enriched_path.is_absolute():
             enriched_path = output_dir / input_file
     else:
-        enriched_path = output_dir / "enriched_products.json"
+        enriched_path = output_dir / "categorized_products.json"
     
     if not enriched_path.exists():
         logger.error(f"Input file not found: {enriched_path}")
@@ -315,20 +295,37 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     if not api_key:
         logger.warning("Running in DRY-RUN mode (no API key). Showing mock AI fields.")
         dry_run = True
-        client = None
+        agent = None
+        fallback_agent = None
     else:
         dry_run = False
-        client = OpenAI(api_key=api_key)
+        try:
+            model_config = get_model_config(step="enrichment")
+            primary_model = model_config["model"]
+            fallback_model = model_config["fallback_model"]
+            temperature = model_config["temperature"]
+            
+            logger.debug(f"Initializing agents: {primary_model} (primary), {fallback_model} (fallback)")
+            agent = ProductDescriptionAgent(model=primary_model, temperature=temperature)
+            fallback_agent = ProductDescriptionAgent(model=fallback_model, temperature=temperature)
+        except Exception as e:
+            logger.error(f"Failed to initialize agents: {e}")
+            return False
     
     ai_config = config.get("ai", {})
-    model_config = get_model_config()
+    model_config = get_model_config(step="enrichment")
     
-    # Use model from config if specified, else use default from ai_config module
-    model = ai_config.get("model") or model_config["model"]
-    temperature = ai_config.get("temperature") or model_config["temperature"]
-    max_retries = model_config["max_retries"]
+    primary_model = model_config["model"]
+    fallback_model = model_config["fallback_model"]
+    quality_threshold = ai_config.get("quality_threshold", 0.70)
+    system_prompt = get_system_prompt()
     
-    logger.info(f"Loading enriched products: {enriched_path}")
+    logger.info(f"AI Enrichment Setup (Using Agents SDK):")
+    logger.info(f"  Primary model: {primary_model}")
+    logger.info(f"  Fallback model: {fallback_model}")
+    logger.info(f"  Quality threshold: {quality_threshold}")
+    
+    logger.info(f"Loading products: {enriched_path}")
     with open(enriched_path, 'r', encoding='utf-8') as f:
         products = json.load(f)
     
@@ -346,25 +343,29 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
         logger.info(f"[{idx}/{len(products)}] {product_num}")
         
         if dry_run:
-            # Mock AI response for testing
             logger.debug(f"  (dry-run) Generating mock AI fields...")
             ai_data = {
                 "DESC_SHORT": "Premium cleaning brush",
-                "DESC_LONG": "This is a professional-grade cleaning brush designed for commercial and industrial use. The brush features high-quality materials and durable construction, making it ideal for tough cleaning tasks. Perfect for cleaning floors, walls, and other surfaces in professional environments.",
+                "DESC_LONG": "This is a professional-grade cleaning brush designed for commercial and industrial use. The brush features high-quality materials and durable construction, making it ideal for tough cleaning tasks.",
                 "PROD_SEARCHWORD": "cleaning brush, professional brush, industrial cleaner, floor brush, commercial cleaning",
-                "META_DESCRIPTION": "Professional cleaning brush for B2B use. Durable, high-quality design. Køb her »"
+                "META_DESCRIPTION": "Professional cleaning brush for B2B use. Durable, high-quality design. Køb her »",
             }
             logger.info(f"  ✓ Mock AI fields generated")
         else:
-            # Call real API
-            if client:
-                ai_data = call_openai_api(logger, product, client, model, temperature)
+            if agent:
+                ai_data = call_agent_api(
+                    logger, product,
+                    agent=agent,
+                    system_prompt=system_prompt,
+                    fallback_agent=fallback_agent,
+                    quality_threshold=quality_threshold
+                )
                 if not ai_data:
-                    logger.warning(f"  Skipping product due to API failure")
+                    logger.warning(f"  Skipping product due to agent failure")
                     error_count += 1
                     continue
             else:
-                logger.warning(f"  API client not available")
+                logger.warning(f"  Agent not available")
                 error_count += 1
                 continue
         
@@ -397,7 +398,7 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
 
 
 def main():
-    """Main entry point. Accepts optional input file as command-line argument."""
+    """Main entry point."""
     config = load_config()
     logger = setup_logging(Path(config["paths"]["logs"]))
     
@@ -405,7 +406,6 @@ def main():
     logger.info("Step 4: AI-Powered Product Enrichment")
     logger.info("=" * 60)
     
-    # Check if input file provided as argument
     input_file = None
     if len(sys.argv) > 1:
         input_file = sys.argv[1]

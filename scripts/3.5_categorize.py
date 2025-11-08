@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from api_manager import get_categories, get_products, get_cache_status
+from ai_config import get_model_config
 
 # Safe stream for console output (handles encoding errors)
 class SafeStream:
@@ -446,11 +447,15 @@ def categorize_with_llm_fallback(
     logger
 ) -> Dict[str, Any]:
     """
-    Use LLM (gpt-3.5-turbo) as fallback for low-confidence cases.
+    Use LLM (fallback model from ai_config) as fallback for low-confidence cases.
     
     This is expensive but accurate - only used when embeddings fail.
     """
     from categorize_helpers import get_category_system_prompt, get_category_user_prompt, build_category_tree
+    
+    # Get fallback model from ai_config
+    model_config = get_model_config(step="categorization")
+    fallback_model = model_config["fallback_model"]
     
     # Build compact category tree
     category_tree = build_category_tree(categories, category_product_map, compact=True)
@@ -461,7 +466,7 @@ def categorize_with_llm_fallback(
     
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=fallback_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -518,8 +523,12 @@ def process_products(
         logger
     )
     
+    # Get fallback model for logging
+    model_config = get_model_config(step="categorization")
+    fallback_model = model_config["fallback_model"]
+    
     logger.info(f"Processing {len(products)} products with embedding-based categorization...")
-    logger.info(f"Confidence threshold: {confidence_threshold}%, LLM fallback: gpt-3.5-turbo")
+    logger.info(f"Confidence threshold: {confidence_threshold}%, LLM fallback: {fallback_model}")
     
     categorized_products = []
     stats = {

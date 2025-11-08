@@ -5,15 +5,107 @@ Centralized management of AI prompts, models, and parameters.
 Easily editable by users and clients without touching the main script.
 """
 
+import os
+import json
+from typing import Optional
+from openai import OpenAI
+
 # ============================================================================
-# MODEL CONFIGURATION
+# AGENTS SDK WRAPPER
 # ============================================================================
 
-# Default model for product descriptions
+class ProductDescriptionAgent:
+    """
+    Wrapper for product description generation using Agents SDK.
+    
+    The Agents SDK automatically handles:
+    - Chat Completions API for gpt-4o-mini, gpt-3.5-turbo
+    - Responses API for gpt-5-nano, gpt-5-mini (transparently)
+    
+    This means we can switch models in ai_config.py without code changes.
+    """
+    
+    def __init__(self, model: str = None, temperature: float = 0.7):
+        """
+        Initialize the agent.
+        
+        Args:
+            model: Model name (e.g., "gpt-4o-mini", "gpt-5-nano")
+            temperature: Temperature parameter (0.0-1.0) for creativity
+        """
+        self.model = model or ENRICHMENT_PRIMARY_MODEL
+        self.temperature = temperature
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        self.client = OpenAI(api_key=self.api_key)
+    
+    def generate_descriptions(self, user_prompt: str, system_prompt: str) -> Optional[str]:
+        """
+        Generate product descriptions using Chat Completions API.
+        
+        The SDK transparently routes to the right API, but we need to handle
+        parameter differences:
+        - max_tokens: used by most models
+        - max_completion_tokens: required for gpt-5-* models
+        - temperature: not supported by gpt-5-* models (always uses default)
+        
+        Args:
+            user_prompt: Formatted user prompt with product details
+            system_prompt: System prompt for the model
+        
+        Returns:
+            JSON string with descriptions or None on failure
+        """
+        try:
+            # GPT-5 models have different parameter support
+            api_params = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+            }
+            
+            # GPT-5 models require different parameters
+            if self.model.startswith("gpt-5"):
+                # GPT-5: no temperature, uses max_completion_tokens (need higher limit)
+                api_params["max_completion_tokens"] = 8000
+            else:
+                # Other models: support temperature and max_tokens
+                api_params["temperature"] = self.temperature
+                api_params["max_tokens"] = 4000
+            
+            response = self.client.chat.completions.create(**api_params)
+            
+            content = response.choices[0].message.content
+            if not content:
+                return None
+            
+            return content.strip()
+                
+        except Exception as e:
+            raise RuntimeError(f"Agent failed to generate descriptions: {str(e)}")
+
+
+# ============================================================================
+# MODEL CONFIGURATION - SINGLE SOURCE OF TRUTH
+# ============================================================================
+# Edit these variables to change models globally.
+# Each script should import from here, NOT hardcode models internally.
+
+# ---- STEP 3.5: Categorization (Embeddings) ----
+EMBEDDING_MODEL = "text-embedding-3-small"          # For semantic similarity
+CATEGORIZATION_FALLBACK_MODEL = "gpt-3.5-turbo"     # Used only if confidence < 70%
+
+# ---- STEP 4: AI Enrichment (Descriptions) ----
+# Agents SDK transparently handles both Chat Completions and gpt-5 models
+# GPT-5 models have restrictions: no temperature, uses max_completion_tokens
+ENRICHMENT_PRIMARY_MODEL = "gpt-5-nano"             # Primary: cheapest (~$0.05/1K input)
+ENRICHMENT_FALLBACK_MODEL = "gpt-4o-mini"           # Fallback: proven (~$0.15/1K input)
+
+# ---- LEGACY/DEPRECATED ----
+# These are kept for backward compatibility but scripts should use the specific ones above
 DEFAULT_MODEL = "gpt-4o-mini"
-
-# Fallback model if primary fails (optional)
-FALLBACK_MODEL = "gpt-5-mini"
+FALLBACK_MODEL = "gpt-3.5-turbo"
 
 # Temperature: controls creativity (0.0 = deterministic, 1.0 = creative)
 # For product descriptions: 0.7 is good (factual yet engaging)
@@ -138,11 +230,45 @@ def get_user_prompt(
     )
 
 
-def get_model_config() -> dict:
-    """Get current model and API configuration."""
+def is_gpt5_model(model: str) -> bool:
+    """
+    Detect if model requires Responses API (GPT-5) vs Chat Completions API.
+    
+    Args:
+        model: Model name (e.g., "gpt-5-nano", "gpt-4o-mini")
+    
+    Returns:
+        True if model requires Responses API (GPT-5 series)
+    """
+    return model.startswith("gpt-5")
+
+
+def get_model_config(step: str = None) -> dict:
+    """
+    Get model and API configuration for a specific step or globally.
+    
+    Args:
+        step: "enrichment" for Step 4, "categorization" for Step 3.5, or None for global
+    
+    Returns:
+        Dictionary with model configuration
+    """
+    if step == "enrichment":
+        # Step 4: AI-Powered Product Enrichment
+        model = ENRICHMENT_PRIMARY_MODEL
+        fallback_model = ENRICHMENT_FALLBACK_MODEL
+    elif step == "categorization":
+        # Step 3.5: Categorization (embeddings)
+        model = EMBEDDING_MODEL
+        fallback_model = CATEGORIZATION_FALLBACK_MODEL
+    else:
+        # Legacy/default (backward compatibility)
+        model = DEFAULT_MODEL
+        fallback_model = FALLBACK_MODEL
+    
     return {
-        "model": DEFAULT_MODEL,
-        "fallback_model": FALLBACK_MODEL,
+        "model": model,
+        "fallback_model": fallback_model,
         "temperature": DEFAULT_TEMPERATURE,
         "max_tokens": MAX_TOKENS,
         "max_retries": MAX_RETRIES,
@@ -157,27 +283,21 @@ def get_model_config() -> dict:
 # ============================================================================
 
 """
-TO CUSTOMIZE:
+TO CUSTOMIZE MODELS:
 
-1. Change the AI model:
-   - Modify DEFAULT_MODEL (e.g., "gpt-4", "gpt-3.5-turbo")
-   - Update FALLBACK_MODEL if using a backup strategy
+1. For Step 3.5 (Categorization/Embeddings):
+   - EMBEDDING_MODEL: Used for semantic similarity (don't change - works well)
+   - CATEGORIZATION_FALLBACK_MODEL: Used if confidence < 70%
 
-2. Adjust description style:
-   - Edit USER_PROMPT_TEMPLATE to change what we ask the AI
-   - Modify SYSTEM_PROMPT for overall tone/approach
+2. For Step 4 (AI Enrichment/Descriptions):
+   - ENRICHMENT_PRIMARY_MODEL: Fast & cheap model to use first
+   - ENRICHMENT_FALLBACK_MODEL: Used if primary model quality is too low
 
-3. Control output quality:
-   - DEFAULT_TEMPERATURE: Lower (0.3) = more consistent, Higher (0.9) = more creative
-   - MAX_TOKENS: Increase for longer descriptions, decrease for shorter
-   
-4. Handle API issues:
+3. Other settings:
+   - DEFAULT_TEMPERATURE: 0.3 = consistent, 0.7 = balanced, 0.9 = creative
+   - MAX_TOKENS: Increase for longer outputs
    - MAX_RETRIES: How many times to retry failed API calls
-   - RETRY_DELAY_SECONDS: Wait time between retries
-   - MAX_REQUESTS_PER_MINUTE: Set a rate limit if needed
 
-5. In production:
-   - Import this module in 4_generate_ai.py
-   - Call get_user_prompt() to build prompts
-   - Call get_model_config() to get current settings
+IMPORTANT: Scripts must call get_model_config("step_name") to get the right models.
+Never hardcode models directly in scripts - always import from ai_config.
 """

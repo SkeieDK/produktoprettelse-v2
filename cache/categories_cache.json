@@ -21393,6 +21393,48 @@
     ]
   },
   {
+    "number": "30798",
+    "b2BGroupId": "30798",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 6004,
+    "modified": false,
+    "editedDate": "2025-10-28T09:18:34.513",
+    "createdDate": "2025-10-28T09:18:18.537",
+    "texts": {
+      "items": [
+        {
+          "id": 4360,
+          "categoryNumber": "30798",
+          "url": "https://engrosrengoringsmidler.dk/shop/nitrogen-danmark-6004c1.html",
+          "name": "Nitrogen Danmark ",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap.webp",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
+    ]
+  },
+  {
     "number": "3080000000000",
     "b2BGroupId": "0",
     "infoLayout": 0,
@@ -21432,6 +21474,90 @@
     "segmentIds": [],
     "parentIds": [
       "3000000000000"
+    ]
+  },
+  {
+    "number": "30805",
+    "b2BGroupId": "30805",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 6005,
+    "modified": false,
+    "editedDate": "2025-10-28T10:48:11.853",
+    "createdDate": "2025-10-28T10:47:36.98",
+    "texts": {
+      "items": [
+        {
+          "id": 4361,
+          "categoryNumber": "30805",
+          "url": "https://engrosrengoringsmidler.dk/shop/pava-bilsyn-farum-a-s-6005c1.html",
+          "name": "Pava Bilsyn Farum A/S",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap.webp",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
+    ]
+  },
+  {
+    "number": "30895",
+    "b2BGroupId": "30895",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 6006,
+    "modified": false,
+    "editedDate": "2025-11-05T08:49:30.22",
+    "createdDate": "2025-11-05T08:49:30.22",
+    "texts": {
+      "items": [
+        {
+          "id": 4362,
+          "categoryNumber": "30895",
+          "url": "https://engrosrengoringsmidler.dk/shop/hybess-6006c1.html",
+          "name": "HyBESS",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap.webp",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
     ]
   },
   {

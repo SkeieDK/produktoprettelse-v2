@@ -23,12 +23,13 @@ chrome:
   retry_without_headless: true
 
 # AI API settings (override with environment variables)
+# NOTE: Model selection has been moved to scripts/ai_config.py (single source of truth)
+# Do NOT configure models here - edit ai_config.py instead!
 ai:
-  api_key: ""  # Set via AI_API_KEY environment variable
+  api_key: ""  # Set via AI_API_KEY or OPENAI_API_KEY environment variable
   provider: "openai"  # or "anthropic"
-  model: "gpt-4"
-  max_tokens: 1000
-  temperature: 0.7
+  # Models are now configured ONLY in scripts/ai_config.py
+  # See ai_config.py for ENRICHMENT_PRIMARY_MODEL, ENRICHMENT_FALLBACK_MODEL, etc.
 
 # Logging
 logging:
