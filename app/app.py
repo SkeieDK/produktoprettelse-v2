@@ -953,17 +953,13 @@ with tab1:
                 st.write("*Input: Saniteret CSV fra Step 1*")
                 input_files = list(DATA_OUTPUT.glob("*_sanitized.csv"))
                 if input_files:
-                    selected_file = st.selectbox(
-                        "Saniteret CSV:",
-                        [f.name for f in input_files],
-                        key="input_sanitized"
-                    )
+                    st.info("📝 Vil køre Step 2 (Scraping) og Step 3 (Image Processing)")
                     if st.button("▶️ Kør Step 2+3 (Scrape & Process)", width='stretch', key="run_s23"):
                         st.info(f"⏳ Kører Step 2+3...")
                         try:
-                            # Run step 2 and 3
+                            # Run step 2 and 3 only (not step 1)
                             result = subprocess.run(
-                                [sys.executable, str(SCRIPTS_DIR / "run_all.py"), "--stop-after", "3"],
+                                [sys.executable, str(SCRIPTS_DIR / "run_steps_2_and_3.py")],
                                 cwd=str(PROJECT_ROOT),
                                 capture_output=True,
                                 text=True,

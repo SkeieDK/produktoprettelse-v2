@@ -148,6 +148,10 @@ def process_images(logger, config):
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
     
+    # Create PDF directory for datablad
+    pdfs_dir = output_dir / "pdfs"
+    pdfs_dir.mkdir(exist_ok=True)
+    
     supplier_info_path = output_dir / "supplier_info.json"
     if not supplier_info_path.exists():
         logger.error(f"Input file not found: {supplier_info_path}")
@@ -186,6 +190,7 @@ def process_images(logger, config):
     
     processed_count = 0
     image_count = 0
+    pdf_count = 0
     
     for idx, product in enumerate(supplier_data, 1):
         product_num = product.get("product_number", f"product_{idx}")
@@ -200,6 +205,38 @@ def process_images(logger, config):
                 if key not in product or key in ["PROD_NUM", "PROD_NUM_old"]:
                     product[key] = value
             logger.debug(f"  Merged metadata from processed products")
+        
+        # Download datablad PDF if available
+        # Priority: ProductDataSheetURL > SDSDocumentURL > DatabladMGURL > etc.
+        pdf_url_fields = [
+            "ProductDataSheetURL", "SDSDocumentURL", "DatabladMGURL", 
+            "DatabladURL", "DeclarationOfComplianceURL", "MSDSDocumentURL"
+        ]
+        
+        product_num_clean = product.get("PROD_NUM_old", product_num.replace(" - Deaktiveret", ""))
+        pdf_downloaded = False
+        
+        for field in pdf_url_fields:
+            pdf_url = product.get(field)
+            if pdf_url and str(pdf_url).strip() and not pdf_downloaded:
+                try:
+                    import requests
+                    response = requests.get(str(pdf_url).strip(), timeout=10)
+                    response.raise_for_status()
+                    
+                    # Save PDF with clean product number
+                    pdf_path = pdfs_dir / f"{product_num_clean}.pdf"
+                    with open(pdf_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    logger.info(f"  Downloaded datablad PDF from {field}")
+                    pdf_count += 1
+                    pdf_downloaded = True
+                    break  # Only download one PDF per product
+                    
+                except Exception as e:
+                    logger.debug(f"  Failed to download PDF from {field}: {e}")
+                    continue
         
         if "images" not in product or not product["images"]:
             logger.debug(f"  No images for {product_num}")
@@ -256,7 +293,9 @@ def process_images(logger, config):
     logger.info("✓ Step 3 complete")
     logger.info(f"  Processed: {processed_count} products")
     logger.info(f"  Images copied: {image_count}")
+    logger.info(f"  PDFs downloaded: {pdf_count}")
     logger.info(f"  Output images: {images_dir}")
+    logger.info(f"  Output PDFs: {pdfs_dir}")
     logger.info(f"  Output JSON: {enriched_path}")
     logger.info("=" * 60)
     

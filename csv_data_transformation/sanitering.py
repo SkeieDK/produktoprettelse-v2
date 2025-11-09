@@ -443,16 +443,21 @@ class CSVSanitering:
 
     def add_prod_num(self, max_prod_num: str):
         """
-        Generer unikt PROD_NUM for hver række, startende fra højeste eksisterende PROD_NUM og +10 for hver.
+        Generer unikt PROD_NUM for hver række, startende fra højeste eksisterende PROD_NUM + 10 og derefter +10 for hver.
+        E.g., hvis max er E146223, så starter vi fra E146230
         """
         import re
+        import math
         # Generer nyt PROD_NUM for hver række
         match = re.match(r"([A-Za-z]+)(\d+)", max_prod_num)
         if match:
             prefix, num = match.groups()
-            start_num = int(num)
+            current_num = int(num)
+            # Round up to next multiple of 10
+            start_num = math.ceil(current_num / 10) * 10
         else:
             prefix, start_num = "E", 100000
+        # Generate product numbers starting from rounded value
         prod_nums = [f"{prefix}{start_num + i*10}" for i in range(len(self.df))]
         self.df["PROD_NUM"] = [num + " - Deaktiveret" for num in prod_nums]
         self.df["PROD_NUM_old"] = prod_nums

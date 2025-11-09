@@ -30,6 +30,9 @@ DATA_OUTPUT = DATA_DIR / "output"
 LOGS_DIR = PROJECT_ROOT / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
+# Image source directory (1500x1500 processed images)
+IMAGES_SOURCE_DIR = Path(r"C:\Users\anton\OneDrive - Bunzl Continental Europe\Documents - Bonvig\Produktbilleder_1500x1500")
+
 # Setup logging
 log_file = LOGS_DIR / "5_upload_to_cms.log"
 logging.basicConfig(
@@ -57,12 +60,18 @@ class DandomainUploader:
         
         # Load credentials from environment
         self.api_key = os.getenv('API_KEY')
-        self.ftp_host = os.getenv('FTP_HOST', 'webshopdk.dk')
+        self.ftp_host = os.getenv('FTP_HOST', '')
         self.ftp_user = os.getenv('FTP_USER', '')
         self.ftp_password = os.getenv('FTP_PASSWORD', '')
         
         if not self.api_key:
             raise ValueError("API_KEY not found in environment variables!")
+        
+        if not self.ftp_host or not self.ftp_user or not self.ftp_password:
+            logger.warning("FTP credentials not fully configured - image/PDF upload will fail!")
+            logger.warning(f"FTP_HOST: {'✓' if self.ftp_host else '✗'}")
+            logger.warning(f"FTP_USER: {'✓' if self.ftp_user else '✗'}")
+            logger.warning(f"FTP_PASSWORD: {'✓' if self.ftp_password else '✗'}")
         
         # API endpoints
         self.base_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2"
@@ -70,10 +79,24 @@ class DandomainUploader:
         
         # FTP paths
         self.ftp_image_path = "/images/produkt_billeder/"
-        self.ftp_pdf_path = "/images/produkt_billeder/"  # Same folder or different?
+        self.ftp_pdf_path = "/images/datablade/"
         
-        # Image base URL (where uploaded images will be accessible)
-        self.image_base_url = "https://engrosrengoringsmidler.dk/images/produkt_billeder/"
+        # Image base URL (relative path - no domain prefix)
+        self.image_base_url = "/images/produkt_billeder/"
+        self.pdf_base_url = "/images/datablade/"
+        
+        # Load products cache for duplicate checking
+        cache_file = PROJECT_ROOT / "cache" / "products_cache.json"
+        self.existing_products = []
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    self.existing_products = json.load(f)
+                logger.info(f"Loaded {len(self.existing_products)} existing products from cache")
+            except Exception as e:
+                logger.warning(f"Could not load products cache: {e}")
+        else:
+            logger.warning("products_cache.json not found - cannot check for duplicates!")
         
         logger.info("Dandomain uploader initialized")
         if self.dry_run:
@@ -92,53 +115,33 @@ class DandomainUploader:
     
     def check_product_exists(self, product_number: str, vendor_number: str) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
-        Check if product already exists by product number or vendor number
+        Check if product already exists by product number or vendor number using local cache
         
         Returns:
             (exists, product_data, match_field) - True if exists, along with existing product data and which field matched
         """
-        try:
-            headers = self._create_auth_header()
-            
-            # Search by product number
-            params = {'number': product_number}
-            response = requests.get(self.products_url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
-            items = data.get('items', [])
-            
-            if items:
-                logger.info(f"Product {product_number} already exists (found by number)")
-                return True, items[0], "product number"
-            
-            # Search by vendor number if not found by product number
-            if vendor_number:
-                params = {'vendorNumber': vendor_number}
-                response = requests.get(self.products_url, headers=headers, params=params, timeout=30)
-                response.raise_for_status()
-                
-                data = response.json()
-                items = data.get('items', [])
-                
-                if items:
-                    logger.info(f"Product with vendor number {vendor_number} already exists")
-                    return True, items[0], "vendor number"
-            
-            return False, None, None
-            
-        except Exception as e:
-            logger.error(f"Error checking if product exists: {e}")
-            # On error, assume it doesn't exist to avoid blocking uploads
-            return False, None, None
+        # Search in cache by product number (exact match)
+        for product in self.existing_products:
+            if product.get('number') == product_number:
+                logger.info(f"Product {product_number} already exists (found by number in cache)")
+                return True, product, "product number"
+        
+        # Search by vendor number if not found by product number
+        if vendor_number:
+            for product in self.existing_products:
+                if str(product.get('vendorNumber', '')) == str(vendor_number):
+                    logger.info(f"Product with vendor number {vendor_number} already exists (found in cache)")
+                    return True, product, "vendor number"
+        
+        return False, None, None
     
-    def upload_image_ftp(self, local_path: Path, product_number: str) -> Optional[str]:
+    def upload_image_ftp(self, local_path: Path, remote_filename: str = None) -> Optional[str]:
         """
         Upload image to Dandomain FTP server
         
         Args:
             local_path: Path to local image file
-            product_number: Product number (used for filename)
+            remote_filename: Optional remote filename (if None, uses local filename)
         
         Returns:
             URL of uploaded image, or None if upload failed
@@ -147,9 +150,9 @@ class DandomainUploader:
             logger.warning(f"Image file not found: {local_path}")
             return None
         
-        # Generate remote filename (e.g., E146223.jpg)
-        file_extension = local_path.suffix
-        remote_filename = f"{product_number}{file_extension}"
+        # Use original filename if no remote filename specified
+        if remote_filename is None:
+            remote_filename = local_path.name
         
         if self.dry_run:
             logger.info(f"[DRY RUN] Would upload {local_path.name} → {self.ftp_image_path}{remote_filename}")
@@ -177,13 +180,13 @@ class DandomainUploader:
             logger.error(f"Failed to upload image via FTP: {e}")
             return None
     
-    def upload_pdf_ftp(self, local_path: Path, product_number: str) -> Optional[str]:
+    def upload_pdf_ftp(self, local_path: Path, product_number_clean: str) -> Optional[str]:
         """
         Upload PDF (datablad) to Dandomain FTP server
         
         Args:
             local_path: Path to local PDF file
-            product_number: Product number (used for filename)
+            product_number_clean: Clean product number without " - Deaktiveret" (e.g., E146230)
         
         Returns:
             URL of uploaded PDF, or None if upload failed
@@ -192,12 +195,12 @@ class DandomainUploader:
             logger.warning(f"PDF file not found: {local_path}")
             return None
         
-        # Generate remote filename (e.g., E146223_datablad.pdf)
-        remote_filename = f"{product_number}_datablad.pdf"
+        # Remote filename is just the product number (e.g., E146230.pdf)
+        remote_filename = f"{product_number_clean}.pdf"
         
         if self.dry_run:
             logger.info(f"[DRY RUN] Would upload {local_path.name} → {self.ftp_pdf_path}{remote_filename}")
-            return f"{self.image_base_url}{remote_filename}"
+            return f"{self.pdf_base_url}{remote_filename}"
         
         try:
             # Connect to FTP
@@ -213,7 +216,7 @@ class DandomainUploader:
             
             ftp.quit()
             
-            pdf_url = f"{self.image_base_url}{remote_filename}"
+            pdf_url = f"{self.pdf_base_url}{remote_filename}"
             logger.info(f"✓ Uploaded PDF: {remote_filename}")
             return pdf_url
             
@@ -221,14 +224,14 @@ class DandomainUploader:
             logger.error(f"Failed to upload PDF via FTP: {e}")
             return None
     
-    def map_to_dandomain_schema(self, product: Dict, image_url: Optional[str] = None, 
+    def map_to_dandomain_schema(self, product: Dict, image_urls: List[str] = None, 
                                 pdf_url: Optional[str] = None) -> Dict:
         """
         Map our product data to Dandomain API schema
         
         Args:
             product: Our product data from final_products.json
-            image_url: URL of uploaded image (if any)
+            image_urls: List of URLs of uploaded images (if any)
             pdf_url: URL of uploaded PDF (if any)
         
         Returns:
@@ -236,7 +239,10 @@ class DandomainUploader:
         """
         # Extract fields from our data
         product_number = product.get('PROD_NUM', '')
-        vendor_number = product.get('VendorNumber', '')
+        # Get vendor number - ORIGINAL_VENDOR_NUM is the Bunzl vendor number used in Dandomain
+        vendor_number = str(product.get('ORIGINAL_VENDOR_NUM', '') or product.get('VendorNumber', ''))
+        if vendor_number == '':
+            vendor_number = ''
         product_name = product.get('PROD_NAME', '')
         short_desc = product.get('DESC_SHORT', '')
         long_desc = product.get('DESC_LONG', '')
@@ -263,17 +269,19 @@ class DandomainUploader:
             }
         }
         
-        # Add image if uploaded
-        if image_url:
-            dandomain_product["pictureLink"] = image_url
+        # Add images if uploaded
+        if image_urls and len(image_urls) > 0:
+            # First image as primary picture
+            dandomain_product["pictureLink"] = image_urls[0]
             
-            # Also add to media gallery
+            # All images in media gallery
             dandomain_product["media"] = {
                 "items": [
                     {
-                        "mediaUrl": image_url,
-                        "sortOrder": 0
+                        "mediaUrl": url,
+                        "sortOrder": idx
                     }
+                    for idx, url in enumerate(image_urls)
                 ]
             }
         
@@ -330,7 +338,10 @@ class DandomainUploader:
             Result dict with status and details
         """
         product_number = product.get('PROD_NUM', 'UNKNOWN')
-        vendor_number = product.get('VendorNumber', '')
+        # Get vendor number - ORIGINAL_VENDOR_NUM is the Bunzl vendor number used in Dandomain
+        vendor_number = str(product.get('ORIGINAL_VENDOR_NUM', '') or product.get('VendorNumber', ''))
+        if vendor_number == '':
+            vendor_number = ''
         
         result = {
             'product_number': product_number,
@@ -358,27 +369,71 @@ class DandomainUploader:
             logger.warning(f"⚠️  Skipping - {result['message']}")
             return result
         
-        # 2. Upload image if available
-        image_url = None
-        image_dir = DATA_DIR / "images" / product_number
-        if image_dir.exists():
-            # Find first image file
-            image_files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.png"))
-            if image_files:
-                image_url = self.upload_image_ftp(image_files[0], product_number)
-                result['image_uploaded'] = image_url is not None
+        # 2. Upload images if available (all images from product data)
+        uploaded_image_urls = []
         
-        # 3. Upload PDF if available
+        # Check if product has images in JSON data
+        product_images = product.get("images", [])
+        if product_images:
+            logger.info(f"Found {len(product_images)} images to upload")
+            for idx, image_path in enumerate(product_images, 1):
+                # Convert relative path to absolute (remove "images/" prefix)
+                image_filename = image_path.replace("images/", "")
+                
+                # Look in the 1500x1500 processed images folder
+                image_file = IMAGES_SOURCE_DIR / image_filename
+                
+                if image_file.exists():
+                    # Upload with original filename
+                    image_url = self.upload_image_ftp(image_file)
+                    if image_url:
+                        uploaded_image_urls.append(image_url)
+                else:
+                    logger.warning(f"Image file not found: {image_file}")
+            
+            result['image_uploaded'] = len(uploaded_image_urls) > 0
+            logger.info(f"Uploaded {len(uploaded_image_urls)}/{len(product_images)} images")
+        else:
+            # Fallback: Try product-specific folder
+            image_dir = DATA_OUTPUT / "images" / product_number
+            image_files = []
+            if image_dir.exists():
+                image_files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.png"))
+            
+            # If no product folder, look for images in root images/ folder matching product number
+            if not image_files:
+                images_root = DATA_OUTPUT / "images"
+                if images_root.exists():
+                    # Look for files starting with product number (e.g., e146230-*.jpg)
+                    image_files = list(images_root.glob(f"{product_number.lower()}-*.jpg")) + \
+                                 list(images_root.glob(f"{product_number.lower()}-*.png"))
+            
+            if image_files:
+                for image_file in image_files:
+                    image_url = self.upload_image_ftp(image_file)
+                    if image_url:
+                        uploaded_image_urls.append(image_url)
+                result['image_uploaded'] = len(uploaded_image_urls) > 0
+        
+        # Use first uploaded image as primary image
+        primary_image_url = uploaded_image_urls[0] if uploaded_image_urls else None
+        
+        # 3. Upload PDF datablad if available
+        # Get clean product number (without " - Deaktiveret")
+        product_number_clean = product.get('PROD_NUM_old', product_number.replace(' - Deaktiveret', ''))
+        
         pdf_url = None
-        pdf_dir = DATA_DIR / "pdfs" / product_number
-        if pdf_dir.exists():
-            pdf_files = list(pdf_dir.glob("*.pdf"))
-            if pdf_files:
-                pdf_url = self.upload_pdf_ftp(pdf_files[0], product_number)
-                result['pdf_uploaded'] = pdf_url is not None
+        # Look for PDF in data/output/pdfs folder with clean product number
+        pdf_file = DATA_OUTPUT / "pdfs" / f"{product_number_clean}.pdf"
+        
+        if pdf_file.exists():
+            pdf_url = self.upload_pdf_ftp(pdf_file, product_number_clean)
+            result['pdf_uploaded'] = pdf_url is not None
+        else:
+            logger.debug(f"No PDF datablad found for {product_number_clean}")
         
         # 4. Map to Dandomain schema
-        dandomain_product = self.map_to_dandomain_schema(product, image_url, pdf_url)
+        dandomain_product = self.map_to_dandomain_schema(product, uploaded_image_urls, pdf_url)
         
         # 5. Create product via API
         success, error = self.create_product(dandomain_product)
