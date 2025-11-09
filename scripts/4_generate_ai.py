@@ -28,6 +28,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, Dict, Any
+from datetime import datetime
 import yaml
 from dotenv import load_dotenv
 
@@ -257,6 +258,12 @@ Use this example as a guide for tone, structure, and formatting. Adapt it to the
         if not response_text:
             logger.error(f"  Empty response from agent")
             return None
+        
+        # Log cost information if available
+        cost = agent.get_last_cost()
+        usage = agent.get_last_usage()
+        if cost:
+            logger.debug(f"  API cost: ${cost:.6f} ({usage['input_tokens']} input + {usage['output_tokens']} output tokens)")
         
         # Remove markdown code blocks if present
         if response_text.startswith("```"):
@@ -681,10 +688,12 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     processed_count = 0
     success_count = 0
     error_count = 0
+    total_cost = 0.0  # Track total API cost
+    cost_by_model = {}  # Track costs per model
     
-    for idx, product in enumerate(products, 1):
-        product_num = product.get("product_number", f"product_{idx}")
-        logger.info(f"[{idx}/{len(products)}] {product_num}")
+    for i, product in enumerate(products, 1):
+        product_num = product.get("product_number", f"product_{i}")
+        logger.info(f"[{i}/{len(products)}] {product_num}")
         
         # Find similar example (if we have existing products)
         example_product = None
@@ -731,6 +740,15 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
                     logger.warning(f"  Skipping product due to agent failure")
                     error_count += 1
                     continue
+                
+                # Track API costs
+                agent_cost = agent.get_last_cost()
+                agent_model = agent.model
+                total_cost += agent_cost
+                
+                if agent_model not in cost_by_model:
+                    cost_by_model[agent_model] = 0.0
+                cost_by_model[agent_model] += agent_cost
             else:
                 logger.warning(f"  Agent not available")
                 error_count += 1
@@ -754,6 +772,37 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     final_path = output_dir / "final_products.json"
     atomic_write_json(final_path, products)
     logger.info(f"✓ Final products JSON: {final_path}")
+    
+    # Save cost information
+    cost_summary = {
+        "step": "Step 4 (AI Enrichment)",
+        "total_cost_usd": round(total_cost, 6),
+        "products_processed": success_count,
+        "cost_by_model": {model: round(cost, 6) for model, cost in cost_by_model.items()},
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    try:
+        cost_file = output_dir / "ai_costs.json"
+        # If file exists, load it to accumulate costs
+        if cost_file.exists():
+            with open(cost_file, 'r', encoding='utf-8') as f:
+                existing_costs = json.load(f)
+            # Accumulate total cost
+            total_cost_accumulated = existing_costs.get("total_cost_usd", 0.0) + cost_summary["total_cost_usd"]
+            cost_summary["total_cost_usd"] = round(total_cost_accumulated, 6)
+            # Merge model costs
+            existing_by_model = existing_costs.get("cost_by_model", {})
+            for model, cost in cost_by_model.items():
+                existing_by_model[model] = round(existing_by_model.get(model, 0.0) + cost, 6)
+            cost_summary["cost_by_model"] = existing_by_model
+        
+        with open(cost_file, 'w', encoding='utf-8') as f:
+            json.dump(cost_summary, f, ensure_ascii=False, indent=2)
+        logger.info(f"✓ Cost summary saved: {cost_file}")
+        logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
+    except Exception as e:
+        logger.warning(f"Could not save cost summary: {e}")
     
     logger.info("=" * 60)
     logger.info("✓ Step 4 complete")

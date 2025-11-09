@@ -476,7 +476,7 @@ def display_product_card(product, show_actions=False, product_index=None):
                                 .stImage img { max-height: 250px !important; width: auto !important; }
                                 </style>
                                 """, unsafe_allow_html=True)
-                                st.image(img, use_container_width=True)
+                                st.image(img, width='stretch')
                             except Exception as e:
                                 pass
     
@@ -517,6 +517,155 @@ def display_product_card(product, show_actions=False, product_index=None):
                 keyword_html = ''.join([f'<span class="keyword-tag">{k}</span>' for k in keyword_list])
                 st.markdown(f'<div class="product-keywords">{keyword_html}</div>', unsafe_allow_html=True)
         
+        # CATEGORY DISPLAY - Always visible, prominent placement
+        st.divider()
+        
+        # Load categories - use CACHE_DIR constant defined at top of file
+        categories_cache_file = CACHE_DIR / "categories_cache.json"
+        products_cache_file = CACHE_DIR / "products_cache.json"
+        
+        # Debug: Check if file exists
+        if not categories_cache_file.exists():
+            st.error(f"⚠️ Categories cache file not found at: {categories_cache_file}")
+            st.info(f"🔍 Tried path: {categories_cache_file.absolute()}")
+            all_categories = []
+        else:
+            all_categories = load_json_file(categories_cache_file)
+            if not all_categories:
+                st.warning(f"⚠️ Categories cache file is empty or failed to load")
+            else:
+                # Filter to only categories with products (like in Step 3.5)
+                if products_cache_file.exists():
+                    api_products = load_json_file(products_cache_file) or []
+                    
+                    # Build set of category IDs that have products
+                    category_ids_with_products = set()
+                    for product_item in api_products:
+                        # Products reference categories by 'number' field as primaryCategoryId
+                        primary_cat_number = product_item.get('primaryCategoryId', '')
+                        default_cat_number = product_item.get('defaultCategoryId', '')
+                        
+                        # Find the category ID from the number
+                        for cat in all_categories:
+                            cat_number = cat.get('number', '')
+                            if cat_number and (cat_number == primary_cat_number or cat_number == default_cat_number):
+                                category_ids_with_products.add(cat.get('id'))
+                    
+                    # Filter categories to only those with products
+                    categories_with_products = [
+                        cat for cat in all_categories 
+                        if cat.get('id') in category_ids_with_products
+                    ]
+                    
+                    all_categories = categories_with_products
+                    st.success(f"✅ Loaded {len(all_categories)} categories with products (filtered from {len(load_json_file(categories_cache_file))} total)")
+                else:
+                    st.success(f"✅ Loaded {len(all_categories)} categories from cache")
+        
+        if all_categories:
+            # Build category lookup: id -> name and id -> number
+            category_by_id = {}
+            category_id_to_number = {}
+            category_number_to_id = {}
+            category_names = []
+            for cat in all_categories:
+                cat_id = cat.get('id')
+                cat_number = cat.get('number', '')
+                cat_name = cat.get('texts', {}).get('items', [{}])[0].get('name', 'Unavngivet')
+                if cat_id and cat_name:
+                    category_by_id[cat_id] = cat_name
+                    category_id_to_number[cat_id] = cat_number
+                    category_id_to_number[str(cat_id)] = cat_number  # Handle both int and string
+                    if cat_number:
+                        category_number_to_id[cat_number] = cat_id
+                        category_number_to_id[str(cat_number)] = cat_id
+                    category_names.append((cat_id, cat_name, cat_number))
+            
+            # Sort category names alphabetically
+            category_names.sort(key=lambda x: x[1])
+            
+            # Get current category - check both ai_categorization and primaryCategoryId
+            ai_cat = product.get('ai_categorization', {})
+            current_cat_id = ai_cat.get('category_id') if ai_cat else None
+            
+            # Debug: Show what we're looking for
+            primary_cat_id_value = product.get('primaryCategoryId', 'None')
+            
+            # If no ai_categorization.category_id, try to get from primaryCategoryId
+            if not current_cat_id and product.get('primaryCategoryId'):
+                primary_cat_number = product.get('primaryCategoryId')
+                current_cat_id = category_number_to_id.get(primary_cat_number) or category_number_to_id.get(str(primary_cat_number))
+                if current_cat_id:
+                    st.info(f"🔍 Found category via primaryCategoryId: {primary_cat_number} → ID {current_cat_id}")
+            
+            current_cat_name = ai_cat.get('category_name', 'Ingen kategori') if ai_cat else 'Ingen kategori'
+            confidence = ai_cat.get('confidence', 0) if ai_cat else 0
+            
+            # Find current index in category list and get actual name
+            current_index = 0
+            found_in_list = False
+            if current_cat_id:
+                for i, (cat_id, cat_name, cat_number) in enumerate(category_names):
+                    # Handle both string and int IDs
+                    if str(cat_id) == str(current_cat_id) or cat_id == current_cat_id:
+                        current_index = i
+                        current_cat_name = cat_name
+                        found_in_list = True
+                        break
+                
+                # Debug: Show if we couldn't find the category
+                if not found_in_list:
+                    st.warning(f"⚠️ Category ID {current_cat_id} not found in categories list (Total categories: {len(category_names)})")
+            
+            # Display current category (ALWAYS VISIBLE)
+            col_cat_label, col_cat_conf = st.columns([3, 1])
+            with col_cat_label:
+                st.markdown(f"**📁 Kategori:** {current_cat_name}")
+            with col_cat_conf:
+                if confidence > 0:
+                    st.markdown(f"**Tillid:** {confidence}%")
+            
+            # Category editor dropdown (when actions enabled)
+            if show_actions and product_index is not None:
+                # Selectbox with just category names
+                selected_index = st.selectbox(
+                    "Skift kategori:",
+                    options=range(len(category_names)),
+                    format_func=lambda i: category_names[i][1],
+                    index=current_index,
+                    key=f"category_select_{product_index}"
+                )
+                
+                new_cat_id, new_cat_name, new_cat_number = category_names[selected_index]
+                
+                # Only show save button if category changed
+                if str(new_cat_id) != str(current_cat_id):
+                    if st.button("💾 Gem ændring", key=f"save_category_{product_index}", type="primary"):
+                        # Update product with both ai_categorization AND primaryCategoryId
+                        product['ai_categorization'] = {
+                            'category_id': new_cat_id,
+                            'category_name': new_cat_name,
+                            'confidence': 100,  # Manual selection = 100% confidence
+                            'method': 'manual'
+                        }
+                        product['primaryCategoryId'] = new_cat_number  # Set the category number for API
+                        
+                        # Save to file
+                        final_products_file = DATA_OUTPUT / "final_products.json"
+                        products = load_json_file(final_products_file) or []
+                        for p in products:
+                            if p.get('product_number') == prod_num_raw:
+                                p['ai_categorization'] = product['ai_categorization']
+                                p['primaryCategoryId'] = new_cat_number
+                                break
+                        
+                        with open(final_products_file, 'w', encoding='utf-8') as f:
+                            json.dump(products, f, ensure_ascii=False, indent=2)
+                        
+                        st.success(f"✅ Kategori opdateret til: {new_cat_name}")
+                        time.sleep(0.8)
+                        st.rerun()
+        
         # Metadata
         if product.get('META_DESCRIPTION'):
             with st.expander("🎯 SEO Metadata"):
@@ -538,7 +687,7 @@ def display_product_card(product, show_actions=False, product_index=None):
             
             with col_approve:
                 st.caption("Brug som inspiration")
-                if st.button("✅ Godkend", key=f"approve_card_{product_index}", use_container_width=True):
+                if st.button("✅ Godkend", key=f"approve_card_{product_index}", width='stretch'):
                     product['approved_example'] = True
                     final_products_file = DATA_OUTPUT / "final_products.json"
                     products = load_json_file(final_products_file) or []
@@ -555,7 +704,7 @@ def display_product_card(product, show_actions=False, product_index=None):
             
             with col_regen:
                 st.caption("Rediger manuelt")
-                if st.button("✏️ Rediger", key=f"edit_card_{product_index}", use_container_width=True):
+                if st.button("✏️ Rediger", key=f"edit_card_{product_index}", width='stretch'):
                     st.session_state[f"show_edit_card_{product_index}"] = True
                     st.rerun()
             
@@ -600,7 +749,7 @@ def display_product_card(product, show_actions=False, product_index=None):
                 
                 col_save, col_cancel = st.columns(2)
                 with col_save:
-                    if st.button("💾 Gem Ændringer", key=f"save_edit_card_{product_index}", use_container_width=True):
+                    if st.button("💾 Gem Ændringer", key=f"save_edit_card_{product_index}", width='stretch'):
                         if update_product_descriptions(
                             product_number=prod_num_raw,  # Use raw product number with " - Deaktiveret"
                             desc_short=edited_short,
@@ -616,7 +765,7 @@ def display_product_card(product, show_actions=False, product_index=None):
                             st.error("❌ Kunne ikke gemme ændringer")
                 
                 with col_cancel:
-                    if st.button("❌ Annuller", key=f"cancel_edit_card_{product_index}", use_container_width=True):
+                    if st.button("❌ Annuller", key=f"cancel_edit_card_{product_index}", width='stretch'):
                         st.session_state[f"show_edit_card_{product_index}"] = False
                         st.rerun()
     
@@ -664,7 +813,7 @@ with tab1:
             df = pd.read_csv(file_path)
             st.info(f"📊 **{len(df)} produkter** i filen")
             with st.expander("Vis forhåndsvisning"):
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, width='stretch')
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
     
@@ -681,7 +830,7 @@ with tab1:
         # Full pipeline - CSV through all 5 steps
         st.write("**Køres i rækkefølge:** Sanitize → Scrape+Images → Process Images → Kategorisering → AI Enrichment")
         
-        if st.button("▶️ Kør Alle Trin", use_container_width=True, key="run_all_steps"):
+        if st.button("▶️ Kør Alle Trin", width='stretch', key="run_all_steps"):
             st.info("⏳ Starter pipeline... (dette tager nogle minutter)")
             try:
                 result = subprocess.run(
@@ -702,6 +851,45 @@ with tab1:
                     }
                     st.session_state.last_pipeline_run = datetime.now()
                     st.success("✅ Pipeline fuldført! Alle trin afsluttet.")
+                    
+                    # Display cost information
+                    cost_file = DATA_OUTPUT / "ai_costs.json"
+                    if cost_file.exists():
+                        try:
+                            with open(cost_file, 'r', encoding='utf-8') as f:
+                                cost_data = json.load(f)
+                            
+                            st.divider()
+                            st.subheader("💰 AI API Omkostninger")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric(
+                                    "Samlet omkostning",
+                                    f"${cost_data.get('total_cost_usd', 0.0):.6f}",
+                                    help="Samlet AI API omkostning for alle produkter"
+                                )
+                            
+                            with col2:
+                                products_processed = cost_data.get('products_processed', 0)
+                                if products_processed > 0:
+                                    cost_per_product = cost_data.get('total_cost_usd', 0.0) / products_processed
+                                    st.metric(
+                                        "Omkostning pr. produkt",
+                                        f"${cost_per_product:.8f}",
+                                        help="Gennemsnitlig omkostning per behandlet produkt"
+                                    )
+                                else:
+                                    st.metric("Omkostning pr. produkt", "$0.00000000")
+                            
+                            # Show costs by model
+                            cost_by_model = cost_data.get('cost_by_model', {})
+                            if cost_by_model:
+                                st.markdown("#### Omkostning pr. model:")
+                                for model, cost in cost_by_model.items():
+                                    st.write(f"- **{model}**: ${cost:.6f}")
+                        except Exception as e:
+                            st.warning(f"Kunne ikke læse omkostningsdata: {e}")
                 else:
                     error_msg = result.stderr or result.stdout or "Ukendt fejl"
                     error_safe = error_msg.encode('ascii', errors='replace').decode('ascii')
@@ -721,7 +909,7 @@ with tab1:
         with col_step:
             step_choice = st.radio(
                 "Trin:",
-                ["Step 1: Sanitize", "Step 2+3: Scrape & Process", "Step 3.5: Kategorisering", "Step 4: AI Enrichment"],
+                ["Step 1: Sanitize", "Step 2+3: Scrape & Process", "Step 3.5: Kategorisering", "Step 4: AI Enrichment", "Step 5: Upload til Web"],
                 key="step_choice"
             )
         
@@ -737,7 +925,7 @@ with tab1:
                         [f.name for f in input_files],
                         key="input_csv"
                     )
-                    if st.button("▶️ Kør Step 1 (Sanitize)", use_container_width=True, key="run_s1"):
+                    if st.button("▶️ Kør Step 1 (Sanitize)", width='stretch', key="run_s1"):
                         st.info(f"⏳ Kører Step 1 med `{selected_file}`...")
                         try:
                             full_path = DATA_INPUT / selected_file
@@ -770,7 +958,7 @@ with tab1:
                         [f.name for f in input_files],
                         key="input_sanitized"
                     )
-                    if st.button("▶️ Kør Step 2+3 (Scrape & Process)", use_container_width=True, key="run_s23"):
+                    if st.button("▶️ Kør Step 2+3 (Scrape & Process)", width='stretch', key="run_s23"):
                         st.info(f"⏳ Kører Step 2+3...")
                         try:
                             # Run step 2 and 3
@@ -800,7 +988,7 @@ with tab1:
                 input_files = list(DATA_OUTPUT.glob("enriched_products.json"))
                 if input_files:
                     st.info("📝 Anvender AI til at kategorisere produkter ud fra eksisterende kategorier")
-                    if st.button("▶️ Kør Step 3.5 (Kategorisering)", use_container_width=True, key="run_s35"):
+                    if st.button("▶️ Kør Step 3.5 (Kategorisering)", width='stretch', key="run_s35"):
                         st.info(f"⏳ Kører Step 3.5 (Kategorisering)...")
                         try:
                             result = subprocess.run(
@@ -813,6 +1001,45 @@ with tab1:
                             if result.returncode == 0:
                                 st.session_state.pipeline_status["Step 3.5 (Kategorisering)"] = True
                                 st.success("✅ Step 3.5 fuldført!")
+                                
+                                # Display cost information
+                                cost_file = DATA_OUTPUT / "ai_costs.json"
+                                if cost_file.exists():
+                                    try:
+                                        with open(cost_file, 'r', encoding='utf-8') as f:
+                                            cost_data = json.load(f)
+                                        
+                                        st.divider()
+                                        st.subheader("💰 AI API Omkostninger (Step 3.5)")
+                                        
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            st.metric(
+                                                "Samlet omkostning",
+                                                f"${cost_data.get('total_cost_usd', 0.0):.6f}",
+                                                help="Samlet AI API omkostning for alle produkter"
+                                            )
+                                        
+                                        with col2:
+                                            products_processed = cost_data.get('products_processed', 0)
+                                            if products_processed > 0:
+                                                cost_per_product = cost_data.get('total_cost_usd', 0.0) / products_processed
+                                                st.metric(
+                                                    "Omkostning pr. produkt",
+                                                    f"${cost_per_product:.8f}",
+                                                    help="Gennemsnitlig omkostning per behandlet produkt"
+                                                )
+                                            else:
+                                                st.metric("Omkostning pr. produkt", "$0.00000000")
+                                        
+                                        # Show costs by model
+                                        cost_by_model = cost_data.get('cost_by_model', {})
+                                        if cost_by_model:
+                                            st.markdown("#### Omkostning pr. model:")
+                                            for model, cost in cost_by_model.items():
+                                                st.write(f"- **{model}**: ${cost:.6f}")
+                                    except Exception as e:
+                                        st.warning(f"Kunne ikke læse omkostningsdata: {e}")
                             else:
                                 error_msg = result.stderr or result.stdout or "Ukendt fejl"
                                 error_safe = error_msg.encode('ascii', errors='replace').decode('ascii')
@@ -823,21 +1050,17 @@ with tab1:
                 else:
                     st.warning("Ingen produkter fundet. Kør Step 2+3 først.")
             
-            else:  # Step 4: AI Enrichment
-                st.write("*Input: JSON-fil med produkter*")
-                input_files = list(DATA_OUTPUT.glob("*.json"))
-                if input_files:
-                    selected_file = st.selectbox(
-                        "JSON-fil:",
-                        [f.name for f in input_files],
-                        key="input_json"
-                    )
-                    if st.button("▶️ Kør Step 4 (AI Enrichment)", use_container_width=True, key="run_s4"):
-                        st.info(f"⏳ Kører Step 4 med `{selected_file}`...")
+            elif step_choice == "Step 4: AI Enrichment":
+                # Always use categorized_products.json
+                categorized_file = DATA_OUTPUT / "categorized_products.json"
+                if categorized_file.exists():
+                    st.info(f"📄 *Input: {categorized_file.name}*")
+                    
+                    if st.button("▶️ Kør Step 4 (AI Enrichment)", width='stretch', key="run_s4"):
+                        st.info(f"⏳ Kører Step 4 med `{categorized_file.name}`...")
                         try:
-                            full_path = DATA_OUTPUT / selected_file
                             result = subprocess.run(
-                                [sys.executable, str(SCRIPTS_DIR / "4_generate_ai.py"), str(full_path)],
+                                [sys.executable, str(SCRIPTS_DIR / "4_generate_ai.py"), str(categorized_file)],
                                 cwd=str(PROJECT_ROOT),
                                 capture_output=True,
                                 text=True,
@@ -846,6 +1069,45 @@ with tab1:
                             if result.returncode == 0:
                                 st.session_state.pipeline_status["Step 4 (AI)"] = True
                                 st.success("✅ Step 4 fuldført!")
+                                
+                                # Display cost information
+                                cost_file = DATA_OUTPUT / "ai_costs.json"
+                                if cost_file.exists():
+                                    try:
+                                        with open(cost_file, 'r', encoding='utf-8') as f:
+                                            cost_data = json.load(f)
+                                        
+                                        st.divider()
+                                        st.subheader("💰 AI API Omkostninger (Step 4)")
+                                        
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            st.metric(
+                                                "Samlet omkostning",
+                                                f"${cost_data.get('total_cost_usd', 0.0):.6f}",
+                                                help="Samlet AI API omkostning for alle produkter"
+                                            )
+                                        
+                                        with col2:
+                                            products_processed = cost_data.get('products_processed', 0)
+                                            if products_processed > 0:
+                                                cost_per_product = cost_data.get('total_cost_usd', 0.0) / products_processed
+                                                st.metric(
+                                                    "Omkostning pr. produkt",
+                                                    f"${cost_per_product:.8f}",
+                                                    help="Gennemsnitlig omkostning per behandlet produkt"
+                                                )
+                                            else:
+                                                st.metric("Omkostning pr. produkt", "$0.00000000")
+                                        
+                                        # Show costs by model
+                                        cost_by_model = cost_data.get('cost_by_model', {})
+                                        if cost_by_model:
+                                            st.markdown("#### Omkostning pr. model:")
+                                            for model, cost in cost_by_model.items():
+                                                st.write(f"- **{model}**: ${cost:.6f}")
+                                    except Exception as e:
+                                        st.warning(f"Kunne ikke læse omkostningsdata: {e}")
                             else:
                                 error_msg = result.stderr or result.stdout or "Ukendt fejl"
                                 error_safe = error_msg.encode('ascii', errors='replace').decode('ascii')
@@ -854,7 +1116,93 @@ with tab1:
                             error_safe = str(e).encode('ascii', errors='replace').decode('ascii')
                             st.error(f"❌ Fejl: {error_safe}")
                 else:
-                    st.warning("Ingen JSON-fil fundet. Kør Step 2+3 først eller upload din egen JSON.")
+                    st.warning("⚠️ categorized_products.json ikke fundet. Kør Step 3.5 (Kategorisering) først.")
+            
+            elif step_choice == "Step 5: Upload til Web":
+                st.write("*Input: JSON-fil med færdige produkter (fra Step 4)*")
+                input_files = list(DATA_OUTPUT.glob("final_products.json"))
+                if input_files:
+                    st.info("🌐 Upload produkter til Dandomain webshop")
+                    st.warning("⚠️ Vigtigt: Sørg for at FTP_USER og FTP_PASSWORD er sat i .env filen!")
+                    
+                    # Dry run option
+                    dry_run = st.checkbox("🔍 Preview mode (dry run - ingen faktiske uploads)", value=True, 
+                                         help="Test kørslen uden at uploade noget")
+                    
+                    button_text = "👁️ Preview Upload" if dry_run else "🚀 Upload til Web"
+                    
+                    if st.button(button_text, width='stretch', key="run_s5"):
+                        mode_text = "Preview" if dry_run else "Upload"
+                        st.info(f"⏳ Kører Step 5 ({mode_text})...")
+                        try:
+                            # Build command
+                            cmd = [sys.executable, str(SCRIPTS_DIR / "5_upload_to_cms.py")]
+                            if dry_run:
+                                cmd.append("--dry-run")
+                            
+                            result = subprocess.run(
+                                cmd,
+                                cwd=str(PROJECT_ROOT),
+                                capture_output=True,
+                                text=True,
+                                timeout=600
+                            )
+                            
+                            if result.returncode == 0:
+                                if not dry_run:
+                                    st.session_state.pipeline_status["Step 5 (Upload)"] = True
+                                st.success(f"✅ Step 5 {mode_text} fuldført!")
+                                
+                                # Display upload results
+                                results_file = DATA_OUTPUT / "upload_results.json"
+                                if results_file.exists():
+                                    try:
+                                        with open(results_file, 'r', encoding='utf-8') as f:
+                                            upload_results = json.load(f)
+                                        
+                                        st.divider()
+                                        st.subheader("📊 Upload Resultater")
+                                        
+                                        # Summary metrics
+                                        success_count = sum(1 for r in upload_results if r['status'] == 'success')
+                                        skipped_count = sum(1 for r in upload_results if r['status'] == 'skipped')
+                                        error_count = sum(1 for r in upload_results if r['status'] == 'error')
+                                        
+                                        col1, col2, col3, col4 = st.columns(4)
+                                        with col1:
+                                            st.metric("Total", len(upload_results))
+                                        with col2:
+                                            st.metric("✅ Oprettet", success_count)
+                                        with col3:
+                                            st.metric("⏭️ Sprunget over", skipped_count, 
+                                                     help="Produkter der allerede eksisterer")
+                                        with col4:
+                                            st.metric("❌ Fejl", error_count)
+                                        
+                                        # Show details in expanders
+                                        if skipped_count > 0:
+                                            with st.expander(f"⏭️ Vis {skipped_count} oversprungne produkter"):
+                                                for result in upload_results:
+                                                    if result['status'] == 'skipped':
+                                                        st.info(f"**{result['product_number']}**: {result['message']}")
+                                        
+                                        if error_count > 0:
+                                            with st.expander(f"⚠️ Vis {error_count} fejl"):
+                                                for result in upload_results:
+                                                    if result['status'] == 'error':
+                                                        st.error(f"**{result['product_number']}**: {result['message']}")
+                                    
+                                    except Exception as e:
+                                        st.warning(f"Kunne ikke læse upload resultater: {e}")
+                            else:
+                                error_msg = result.stderr or result.stdout or "Ukendt fejl"
+                                error_safe = error_msg.encode('ascii', errors='replace').decode('ascii')
+                                st.error(f"❌ Fejl: {error_safe[:500]}")
+                        except Exception as e:
+                            error_safe = str(e).encode('ascii', errors='replace').decode('ascii')
+                            st.error(f"❌ Fejl: {error_safe}")
+                else:
+                    st.warning("Ingen final_products.json fundet. Kør Step 4 først.")
     
     st.divider()
     st.subheader("Pipeline Status")
@@ -971,7 +1319,7 @@ with tab4:
             data=log_content,
             file_name=selected_log.name,
             mime="text/plain",
-            use_container_width=True
+            width='stretch'
         )
     
     else:
@@ -1018,7 +1366,7 @@ with tab3:
             new_system_prompt = st.text_area(
                 "System Prompt:",
                 value=current_system_prompt,
-                height=200,
+                height=400,
                 key="system_prompt_editor",
                 label_visibility="collapsed"
             )
@@ -1030,7 +1378,7 @@ with tab3:
             new_user_prompt = st.text_area(
                 "User Prompt Template:",
                 value=current_user_prompt,
-                height=300,
+                height=700,
                 key="user_prompt_editor",
                 label_visibility="collapsed"
             )
@@ -1040,7 +1388,7 @@ with tab3:
             # Save button
             col1, col2 = st.columns([1, 3])
             with col1:
-                if st.button("💾 Gem Prompts", use_container_width=True):
+                if st.button("💾 Gem Prompts", width='stretch'):
                     try:
                         # Replace prompts in config file
                         new_config = ai_config_content
@@ -1072,7 +1420,7 @@ with tab3:
                         st.error(f"❌ Fejl ved gem: {e}")
             
             with col2:
-                if st.button("🔄 Reset til Original", use_container_width=True):
+                if st.button("🔄 Reset til Original", width='stretch'):
                     st.warning("⚠️ Denne funktion er ikke implementeret endnu. Gem en backup manuelt!")
     
     # ========================================================================
@@ -1230,7 +1578,7 @@ with tab3:
                         st.divider()
                         
                         # Save button
-                        if st.button("💾 Gem Golden Examples", use_container_width=True):
+                        if st.button("💾 Gem Golden Examples", width='stretch'):
                             try:
                                 # Update golden examples
                                 golden_examples[str(selected_category)] = current_golden

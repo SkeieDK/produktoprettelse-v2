@@ -23,6 +23,8 @@ class ProductDescriptionAgent:
     - Responses API for gpt-5-nano, gpt-5-mini (transparently)
     
     This means we can switch models in ai_config.py without code changes.
+    
+    Returns cost information from API usage metadata for cost tracking.
     """
     
     def __init__(self, model: str = None, temperature: float = 0.7):
@@ -53,7 +55,11 @@ class ProductDescriptionAgent:
             system_prompt: System prompt for the model
         
         Returns:
-            JSON string with descriptions or None on failure
+            JSON string with descriptions (or None on failure)
+            
+        Note:
+            Cost is calculated internally and logged, but not returned.
+            Use get_last_cost() to retrieve the cost of the last API call.
         """
         try:
             # GPT-5 models have different parameter support
@@ -80,10 +86,63 @@ class ProductDescriptionAgent:
             if not content:
                 return None
             
+            # Extract token usage and calculate cost
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+            cost = calculate_cost(self.model, usage["input_tokens"], usage["output_tokens"])
+            
+            # Store cost for retrieval (accessible via get_last_cost)
+            self._last_cost = cost
+            self._last_usage = usage
+            
+            # Log the cost
+            import logging
+            logger = logging.getLogger("ai_config")
+            logger.debug(f"API call - Model: {self.model}, Tokens: {usage['input_tokens']} in + {usage['output_tokens']} out, Cost: ${cost:.6f}")
+            
             return content.strip()
                 
         except Exception as e:
             raise RuntimeError(f"Agent failed to generate descriptions: {str(e)}")
+    
+    def get_last_cost(self) -> float:
+        """Get the cost of the last API call (USD)."""
+        return getattr(self, '_last_cost', 0.0)
+    
+    def get_last_usage(self) -> dict:
+        """Get the token usage of the last API call."""
+        return getattr(self, '_last_usage', {"input_tokens": 0, "output_tokens": 0})
+
+
+# ============================================================================
+# COST CALCULATION
+# ============================================================================
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """
+    Calculate estimated API cost based on model and token usage.
+    
+    Args:
+        model: Model name (must be in PRICING dict)
+        input_tokens: Number of input tokens used
+        output_tokens: Number of output tokens generated
+    
+    Returns:
+        Estimated cost in USD
+    """
+    if model not in PRICING:
+        # Unknown model - return 0 and log a warning
+        import logging
+        logging.warning(f"Model '{model}' not found in PRICING dict. Cost will be 0. Available models: {list(PRICING.keys())}")
+        return 0.0
+    
+    pricing = PRICING[model]
+    input_cost = input_tokens * pricing["input"]
+    output_cost = output_tokens * pricing["output"]
+    
+    return round(input_cost + output_cost, 6)  # Round to nearest millionth of a dollar
 
 
 # ============================================================================
@@ -121,6 +180,44 @@ MAX_REQUESTS_PER_MINUTE = None
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2  # Exponential backoff: 2, 4, 8...
 RATE_LIMIT_WAIT_SECONDS = 60
+
+# ============================================================================
+# PRICING (per token) - Updated November 2025
+# ============================================================================
+# Source: https://openai.com/api/pricing/
+# Used to estimate costs from usage metadata returned by API
+# Prices are per 1 MILLION tokens, converted to per-token cost
+
+PRICING = {
+    # Embeddings (Step 3.5)
+    "text-embedding-3-small": {
+        "input": 0.02 / 1_000_000,  # $0.02 per 1M tokens
+        "output": 0.0  # No output tokens for embeddings
+    },
+    
+    # Chat Completions (Step 4 - Primary)
+    "gpt-5-nano": {
+        "input": 0.05 / 1_000_000,     # $0.05 per 1M input tokens
+        "output": 0.15 / 1_000_000,    # $0.15 per 1M output tokens
+    },
+    
+    # Chat Completions (Step 4 - Fallback)
+    "gpt-4o-mini": {
+        "input": 0.15 / 1_000_000,     # $0.15 per 1M input tokens
+        "output": 0.60 / 1_000_000,    # $0.60 per 1M output tokens
+    },
+    
+    # Legacy models (backward compatibility)
+    "gpt-3.5-turbo": {
+        "input": 0.50 / 1_000_000,     # $0.50 per 1M tokens
+        "output": 1.50 / 1_000_000,    # $1.50 per 1M tokens
+    },
+    
+    "gpt-4o": {
+        "input": 2.50 / 1_000_000,     # $2.50 per 1M input tokens
+        "output": 10.00 / 1_000_000,   # $10.00 per 1M output tokens
+    },
+}
 
 
 # ============================================================================

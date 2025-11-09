@@ -23,6 +23,7 @@ import os
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
+from datetime import datetime
 import yaml
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -33,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from api_manager import get_categories, get_products, get_cache_status
-from ai_config import get_model_config
+from ai_config import get_model_config, calculate_cost, PRICING
 
 # Safe stream for console output (handles encoding errors)
 class SafeStream:
@@ -166,16 +167,24 @@ def get_api_key(logger, config):
 def build_category_text(category: Dict, example_products: List[Dict]) -> str:
     """
     Build text representation of category for embedding.
+    Now works with RAW API category data.
     
-    Includes: category path, description, and example products.
+    Includes: category name, description, and example products.
     """
-    path = category.get('kategori_sti', category.get('nederste_kategori', 'Unknown'))
-    hovedkat = category.get('hovedkategori', '')
+    # Get category name from texts.items[0].name
+    cat_name = 'Unknown'
+    texts = category.get('texts', {})
+    if isinstance(texts, dict):
+        items = texts.get('items', [])
+        if items and len(items) > 0:
+            cat_name = items[0].get('name', 'Unknown')
     
-    text_parts = [f"Category: {path}"]
+    cat_number = category.get('number', '')
     
-    if hovedkat and hovedkat not in path:
-        text_parts.append(f"Main category: {hovedkat}")
+    text_parts = [f"Category: {cat_name}"]
+    
+    if cat_number:
+        text_parts.append(f"Category number: {cat_number}")
     
     # Add example products if available
     if example_products:
@@ -252,20 +261,24 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 def build_category_with_products_map(categories: List[Dict], products: List[Dict], logger) -> Dict[str, Dict]:
     """
     Build a map of categories with example products from each.
+    Now works with RAW API category data (has 'id' and 'number' fields).
     
     Returns:
-        Dict mapping category_id (PROD_CAT_ID) to {category_info, example_products}
+        Dict mapping category_id (API 'id') to {category_info, example_products}
     """
     logger.info("Building category-to-products map...")
     
-    # Create category map with PROD_CAT_ID as key
+    # Create category map with API 'id' as key
     cat_map = {}
-    # Also create a lookup from category_number to PROD_CAT_ID
+    # Also create a lookup from category 'number' to category 'id'
     cat_number_to_id = {}
     
     for cat in categories:
-        cat_id = str(cat['PROD_CAT_ID'])
-        cat_number = str(cat.get('category_number', ''))
+        cat_id = str(cat.get('id', ''))
+        cat_number = str(cat.get('number', ''))
+        
+        if not cat_id:
+            continue
         
         cat_map[cat_id] = {
             'category_info': cat,
@@ -277,15 +290,15 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
     
     logger.info(f"Built lookup for {len(cat_number_to_id)} category numbers")
     
-    # Map products to categories
+    # Map products to categories (products have 'defaultCategoryId' and 'primaryCategoryId' as NUMBERS)
     for product in products:
         # Get category identifiers from product (these are category NUMBERS, not IDs)
-        default_cat_num = str(product.get('DefaultCategoryId', ''))
-        primary_cat_num = str(product.get('PrimaryCategoryId', ''))
+        default_cat_num = str(product.get('defaultCategoryId', ''))
+        primary_cat_num = str(product.get('primaryCategoryId', ''))
         
         category_ids = set()
         
-        # Convert category numbers to PROD_CAT_IDs
+        # Convert category numbers to category IDs
         if default_cat_num and default_cat_num in cat_number_to_id:
             category_ids.add(cat_number_to_id[default_cat_num])
         
@@ -293,7 +306,13 @@ def build_category_with_products_map(categories: List[Dict], products: List[Dict
             category_ids.add(cat_number_to_id[primary_cat_num])
         
         # Add product to relevant categories (limit 5 examples per category)
-        product_name = product.get('ItemName', product.get('number', 'Unknown'))
+        # Get product name from settings.items[0].name
+        product_name = product.get('number', 'Unknown')
+        settings = product.get('settings', {})
+        if isinstance(settings, dict):
+            items = settings.get('items', [])
+            if items and len(items) > 0:
+                product_name = items[0].get('name', product_name)
         
         for cat_id in category_ids:
             if cat_id in cat_map and len(cat_map[cat_id]['example_products']) < 5:
@@ -318,6 +337,7 @@ def load_or_generate_category_embeddings(
 ) -> Dict[str, List[float]]:
     """
     Load cached category embeddings or generate new ones.
+    Now works with RAW API category data (uses 'id' field).
     
     Returns:
         Dict mapping category_id to embedding vector
@@ -333,7 +353,7 @@ def load_or_generate_category_embeddings(
             
             # Validate cache has all categories
             cached_ids = set(cache_data.keys())
-            current_ids = set(str(cat['PROD_CAT_ID']) for cat in categories)
+            current_ids = set(str(cat.get('id', '')) for cat in categories if cat.get('id'))
             
             if cached_ids == current_ids:
                 logger.info(f"Using cached embeddings for {len(cache_data)} categories")
@@ -348,7 +368,10 @@ def load_or_generate_category_embeddings(
     embeddings = {}
     
     for i, category in enumerate(categories, 1):
-        cat_id = str(category['PROD_CAT_ID'])
+        cat_id = str(category.get('id', ''))
+        if not cat_id:
+            continue
+            
         example_products = category_product_map.get(cat_id, {}).get('example_products', [])
         
         # Build category text
@@ -428,11 +451,17 @@ def find_best_category_by_embedding(
     # Convert similarity (0-1) to confidence (0-100)
     confidence = int(best_similarity * 100)
     
-    # Get category info for reasoning
-    category = next((c for c in categories if str(c['PROD_CAT_ID']) == best_cat_id), None)
+    # Get category info for reasoning (RAW API data uses 'id' field)
+    category = next((c for c in categories if str(c.get('id', '')) == best_cat_id), None)
     if category:
-        cat_path = category.get('kategori_sti', 'Unknown')
-        reasoning = f"Best match: {cat_path} (similarity: {best_similarity:.3f})"
+        # Get category name from texts.items[0].name
+        cat_name = 'Unknown'
+        texts = category.get('texts', {})
+        if isinstance(texts, dict):
+            items = texts.get('items', [])
+            if items and len(items) > 0:
+                cat_name = items[0].get('name', 'Unknown')
+        reasoning = f"Best match: {cat_name} (similarity: {best_similarity:.3f})"
     else:
         reasoning = f"Best match ID: {best_cat_id} (similarity: {best_similarity:.3f})"
     
@@ -503,20 +532,44 @@ def process_products(
     client: OpenAI,
     config: Dict,
     logger
-) -> List[Dict]:
+) -> Tuple[List[Dict], Dict[str, float]]:
     """
     Process all products and assign categories using embeddings.
+    
+    Returns:
+        Tuple of (categorized_products, cost_tracking_dict)
     """
     confidence_threshold = config.get("categorization", {}).get("confidence_threshold", 70)
     cache_dir = Path(config["paths"]["cache"])
+    
+    # Build category ID to number mapping (for setting primaryCategoryId)
+    # categories from API have both 'id' and 'number'
+    category_id_to_number = {}
+    for cat in categories:
+        cat_id = cat.get('id')
+        cat_number = cat.get('number', '')
+        if cat_id and cat_number:
+            category_id_to_number[cat_id] = cat_number
+            category_id_to_number[str(cat_id)] = cat_number  # Handle both int and string
+    
+    logger.info(f"Built category ID->number mapping for {len(category_id_to_number)} categories")
     
     # Build category-to-products map
     logger.info(f"Mapping {len(api_products)} existing products to categories...")
     category_product_map = build_category_with_products_map(categories, api_products, logger)
     
-    # Load or generate category embeddings (one-time cost)
+    # FILTER: Only use categories that have products
+    categories_with_products = [
+        cat for cat in categories 
+        if str(cat.get('id', '')) in category_product_map and 
+        category_product_map[str(cat.get('id', ''))]['example_products']
+    ]
+    
+    logger.info(f"Filtered to {len(categories_with_products)} categories with products (from {len(categories)} total)")
+    
+    # Load or generate category embeddings (one-time cost) - ONLY for categories with products
     category_embeddings = load_or_generate_category_embeddings(
-        categories,
+        categories_with_products,  # Use filtered list
         category_product_map,
         client,
         cache_dir,
@@ -537,6 +590,15 @@ def process_products(
         "llm_fallback": 0,
         "errors": 0,
         "low_confidence": 0
+    }
+    
+    # Track costs
+    cost_tracking = {
+        "total_cost": 0.0,
+        "embedding_cost": 0.0,
+        "llm_fallback_cost": 0.0,
+        "embedding_calls": 0,
+        "llm_calls": 0
     }
     
     for i, product in enumerate(products, 1):
@@ -600,6 +662,18 @@ def process_products(
         # Add categorization to product
         product['ai_categorization'] = result
         
+        # IMPORTANT: Also set primaryCategoryId (required by Dandomain API)
+        # Convert category_id to category_number
+        if result.get('category_id'):
+            cat_id = result['category_id']
+            cat_number = category_id_to_number.get(cat_id) or category_id_to_number.get(str(cat_id))
+            
+            if cat_number:
+                product['primaryCategoryId'] = cat_number
+                logger.debug(f"  Set primaryCategoryId = {cat_number} (from category_id {cat_id})")
+            else:
+                logger.warning(f"  Could not find category number for category_id {cat_id}")
+        
         # Track stats
         if result.get('error'):
             stats['errors'] += 1
@@ -631,7 +705,20 @@ def process_products(
     logger.info(f"Errors:                {stats['errors']}")
     logger.info("="*60)
     
-    return categorized_products
+    # Estimate costs (embeddings are extremely cheap)
+    # Approximate: 1 embedding per product @ $0.02 per 1M tokens
+    # Average product text ~200 tokens = $0.000004 per product
+    estimated_embedding_cost = stats['total'] * 0.000004
+    estimated_llm_cost = stats['llm_fallback'] * 0.0001  # Rough estimate for LLM calls
+    total_cost = estimated_embedding_cost + estimated_llm_cost
+    
+    cost_tracking["total_cost"] = total_cost
+    cost_tracking["embedding_cost"] = estimated_embedding_cost
+    cost_tracking["llm_fallback_cost"] = estimated_llm_cost
+    cost_tracking["embedding_calls"] = stats['total']
+    cost_tracking["llm_calls"] = stats['llm_fallback']
+    
+    return categorized_products, cost_tracking
 
 
 def main():
@@ -676,8 +763,18 @@ def main():
     # Load categories from API
     logger.info("Fetching categories from Dandomain API...")
     try:
-        categories = get_categories(use_cache=True)
-        logger.info(f"Loaded {len(categories)} categories")
+        # Load RAW categories from cache (has 'id' and 'number' fields)
+        categories_cache_file = PROJECT_ROOT / "cache" / "categories_cache.json"
+        if not categories_cache_file.exists():
+            logger.error("categories_cache.json not found. Run API sync first.")
+            print("\n[ERROR] categories_cache.json not found")
+            print("   Run 'Opdater Cache' in Streamlit first")
+            return 1
+        
+        with open(categories_cache_file, 'r', encoding='utf-8') as f:
+            categories = json.load(f)
+        
+        logger.info(f"Loaded {len(categories)} categories from cache")
         
         # Show cache status
         cache_status = get_cache_status()
@@ -687,25 +784,33 @@ def main():
     except Exception as e:
         logger.error(f"Failed to load categories: {e}")
         print(f"\n[ERROR] Error loading categories: {e}")
-        print("   Check API_KEY in .env and api_manager.py configuration")
+        print("   Check API_KEY in .env and run 'Opdater Cache' in Streamlit")
         return 1
     
     # Load existing products from API (for category examples)
     logger.info("Fetching existing products from Dandomain API...")
     try:
-        api_products = get_products(use_cache=True)
-        logger.info(f"Loaded {len(api_products)} existing products")
-        
-        if cache_status.get('products_cache.json', {}).get('exists'):
-            cache_age = cache_status['products_cache.json']['age_hours']
-            logger.info(f"Using cached product data ({cache_age:.1f} hours old)")
+        # Load RAW products from cache (has 'id', 'number', 'primaryCategoryId', etc.)
+        products_cache_file = PROJECT_ROOT / "cache" / "products_cache.json"
+        if not products_cache_file.exists():
+            logger.warning("products_cache.json not found. Will continue without product examples.")
+            api_products = []
+        else:
+            with open(products_cache_file, 'r', encoding='utf-8') as f:
+                api_products = json.load(f)
+            
+            logger.info(f"Loaded {len(api_products)} existing products from cache")
+            
+            if cache_status.get('products_cache.json', {}).get('exists'):
+                cache_age = cache_status['products_cache.json']['age_hours']
+                logger.info(f"Using cached product data ({cache_age:.1f} hours old)")
     except Exception as e:
         logger.warning(f"Failed to load products (will continue without examples): {e}")
         api_products = []
     
     # Process products
     try:
-        categorized_products = process_products(
+        categorized_products, cost_tracking = process_products(
             products,
             categories,
             api_products,
@@ -729,10 +834,49 @@ def main():
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(categorized_products, f, ensure_ascii=False, indent=2)
     
+    # Save or update cost information
+    cost_summary = {
+        "step": "Step 3.5 (Categorization)",
+        "total_cost_usd": round(cost_tracking["total_cost"], 6),
+        "products_processed": len(categorized_products),
+        "cost_by_model": {
+            "text-embedding-3-small": round(cost_tracking["embedding_cost"], 6),
+            "gpt-3.5-turbo-fallback": round(cost_tracking["llm_fallback_cost"], 6)
+        },
+        "embedding_calls": cost_tracking["embedding_calls"],
+        "llm_fallback_calls": cost_tracking["llm_calls"],
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    try:
+        cost_file = output_dir / "ai_costs.json"
+        # If file exists, load it to accumulate costs
+        if cost_file.exists():
+            with open(cost_file, 'r', encoding='utf-8') as f:
+                existing_costs = json.load(f)
+            # Accumulate total cost
+            total_cost_accumulated = existing_costs.get("total_cost_usd", 0.0) + cost_summary["total_cost_usd"]
+            cost_summary["total_cost_usd"] = round(total_cost_accumulated, 6)
+            # Merge model costs
+            existing_by_model = existing_costs.get("cost_by_model", {})
+            for model, cost in cost_summary["cost_by_model"].items():
+                existing_by_model[model] = round(existing_by_model.get(model, 0.0) + cost, 6)
+            cost_summary["cost_by_model"] = existing_by_model
+            # Add step-specific metadata
+            cost_summary["products_processed"] = existing_costs.get("products_processed", 0) + len(categorized_products)
+        
+        with open(cost_file, 'w', encoding='utf-8') as f:
+            json.dump(cost_summary, f, ensure_ascii=False, indent=2)
+        logger.info(f"✓ Cost summary saved: {cost_file}")
+        logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
+    except Exception as e:
+        logger.warning(f"Could not save cost summary: {e}")
+    
     logger.info("Categorization complete!")
     print(f"\n[SUCCESS] Categorized products saved to:")
     print(f"   {output_file}")
-    print(f"\nCost savings: ~75x cheaper than pure LLM approach!")
+    print(f"\nEstimated cost: ${cost_tracking['total_cost']:.6f}")
+    print(f"Cost savings: ~75x cheaper than pure LLM approach!")
     
     return 0
 

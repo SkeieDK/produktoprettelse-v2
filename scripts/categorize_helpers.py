@@ -103,48 +103,43 @@ def build_category_tree(categories: List[Dict], category_product_map: Dict[str, 
     Build a formatted category tree for the AI prompt with example products.
     
     Args:
-        categories: List of category dicts
+        categories: List of category dicts (RAW API format with 'id', 'number', 'texts')
         category_product_map: Map of category_id to products
         compact: If True, only show categories with products (to save tokens)
     """
-    # Group by hovedkategori
-    tree_dict = {}
+    # Build simple list (no hovedkategori grouping since RAW API doesn't have that field)
+    tree_lines = []
+    
     for cat in categories:
-        cat_id = str(cat['PROD_CAT_ID'])
+        cat_id = str(cat.get('id', ''))
+        if not cat_id:
+            continue
         
         # Skip categories without products if compact mode
         if compact and cat_id in category_product_map:
             if not category_product_map[cat_id]['example_products']:
                 continue
         
-        hovedkat = cat.get('hovedkategori', 'Ingen hovedkategori')
-        if hovedkat not in tree_dict:
-            tree_dict[hovedkat] = []
-        tree_dict[hovedkat].append(cat)
-    
-    # Build formatted tree with products
-    tree_lines = []
-    for hovedkat, cats in sorted(tree_dict.items()):
-        if not cats:  # Skip empty groups
-            continue
-            
-        tree_lines.append(f"\n[{hovedkat}]")
-        for cat in cats:
-            cat_id = str(cat['PROD_CAT_ID'])
-            path = cat.get('kategori_sti', cat.get('nederste_kategori', 'Unknown'))
-            
-            # Truncate path if too long
-            if len(path) > 60:
-                path = path[:57] + "..."
-            
-            tree_lines.append(f"  - ID: {cat_id} | {path}")
-            
-            # Add example products if available
-            if cat_id in category_product_map:
-                examples = category_product_map[cat_id]['example_products']
-                if examples:
-                    # Truncate product names to save tokens
-                    short_names = [p['name'][:40] for p in examples[:3]]
-                    tree_lines.append(f"    Ex: {', '.join(short_names)}")
+        # Extract category name from RAW API format
+        cat_name = 'Unknown'
+        texts = cat.get('texts', {})
+        if isinstance(texts, dict):
+            items = texts.get('items', [])
+            if items and len(items) > 0:
+                cat_name = items[0].get('name', 'Unknown')
+        
+        # Truncate name if too long
+        if len(cat_name) > 60:
+            cat_name = cat_name[:57] + "..."
+        
+        tree_lines.append(f"  - ID: {cat_id} | {cat_name}")
+        
+        # Add example products if available
+        if cat_id in category_product_map:
+            examples = category_product_map[cat_id]['example_products']
+            if examples:
+                # Truncate product names to save tokens
+                short_names = [p['name'][:40] for p in examples[:3]]
+                tree_lines.append(f"    Ex: {', '.join(short_names)}")
     
     return "\n".join(tree_lines)
