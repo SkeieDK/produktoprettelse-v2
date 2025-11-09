@@ -37,3 +37,5 @@
 2025-11-08 13:47:47,252 INFO Hentet 3646 produkter i alt
 2025-11-08 14:11:55,063 INFO Bruger cached kategori data (0.4 timer gammel)
 2025-11-08 14:11:55,122 INFO Bruger cached produkt data (0.4 timer gammel)
+2025-11-08 16:58:17,037 INFO Henter produkter fra API...
+2025-11-08 16:58:33,029 INFO Hentet 3646 produkter i alt

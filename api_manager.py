@@ -176,9 +176,14 @@ class APIManager:
         
         return processed_categories
     
-    def get_all_products(self, use_cache: bool = True, cache_hours: int = 24) -> List[Dict]:
+    def get_all_products(self, use_cache: bool = True, cache_hours: int = 24, include_settings: bool = True) -> List[Dict]:
         """
         Hent alle produkter fra API med paginering
+        
+        Args:
+            use_cache: Whether to use cached data
+            cache_hours: How many hours cache is valid
+            include_settings: Whether to include settings (name, descriptions, etc.)
         """
         cache_file = self.cache_dir / "products_cache.json"
         # Tjek cache først
@@ -192,12 +197,18 @@ class APIManager:
         all_products = []
         offset = 0
         limit = 100  # API max er 100
+        
         with tqdm(desc="Henter produkter", unit="batch") as pbar:
             while True:
                 params: Dict[str, Union[int, str]] = {
                     'limit': limit,
                     'offset': offset
                 }
+                
+                # Add settings to include parameter if requested
+                if include_settings:
+                    params['include'] = 'settings'
+                
                 self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
                 response = self._make_api_request(self.product_api_url, params)
                 items = response.get('items', [])
@@ -224,16 +235,29 @@ class APIManager:
         processed_products = []
         
         for product in products:
+            # Extract text fields (name, descriptions, meta)
+            text_data = self._extract_product_texts(product)
+            
             # Map API felter til M kode kolonner
             processed_product = {
                 # Basis produkt info
                 'ItemID': product.get('number', ''),
-                'ItemName': self._get_product_name(product),
+                'ItemName': text_data.get('name', product.get('number', '')),
                 'ItemBarcode': product.get('barCodeNumber', ''),
                 'VendorNumber': product.get('vendorNumber', ''),
                 'ConvertedSystemCost': product.get('costPrice', 0),
                 'NetWeight': product.get('weight', 0),
                 'TotalStockQty': product.get('stockCount', 0),
+                
+                # Text/Description fields (from settings API structure)
+                'name': text_data.get('name', ''),
+                'shortDescription': text_data.get('shortDescription', ''),
+                'longDescription': text_data.get('longDescription', ''),
+                'longDescription2': text_data.get('longDescription2', ''),
+                'keyWords': text_data.get('keyWords', ''),
+                'metaDescription': text_data.get('metaDescription', ''),
+                'pageTitle': text_data.get('pageTitle', ''),
+                'urlName': text_data.get('urlName', ''),
                 
                 # Dandomain specifikke felter
                 'MinBuyAmount': product.get('minBuyAmount', 1),
@@ -268,6 +292,41 @@ class APIManager:
             processed_products.append(processed_product)
         
         return processed_products
+    
+    def _extract_product_texts(self, product: Dict) -> Dict[str, str]:
+        """
+        Extract text fields from product's settings structure.
+        
+        API structure: product.settings.items[0] contains name, shortDescription, longDescription, etc.
+        """
+        text_data = {
+            'name': '',
+            'shortDescription': '',
+            'longDescription': '',
+            'longDescription2': '',
+            'keyWords': '',
+            'metaDescription': '',
+            'pageTitle': '',
+            'urlName': ''
+        }
+        
+        # Check if settings structure exists
+        settings = product.get('settings', {})
+        if isinstance(settings, dict):
+            items = settings.get('items', [])
+            if items and len(items) > 0:
+                # Take first settings item (usually default language)
+                first_setting = items[0]
+                text_data['name'] = first_setting.get('name', '')
+                text_data['shortDescription'] = first_setting.get('shortDescription', '')
+                text_data['longDescription'] = first_setting.get('longDescription', '')
+                text_data['longDescription2'] = first_setting.get('longDescription2', '')
+                text_data['keyWords'] = first_setting.get('keyWords', '')
+                text_data['metaDescription'] = first_setting.get('metaDescription', '')
+                text_data['pageTitle'] = first_setting.get('pageTitle', '')
+                text_data['urlName'] = first_setting.get('urlName', '')
+        
+        return text_data
     
     def _get_product_name(self, product: Dict) -> str:
         """Udtræk produkt navn - skal måske hentes fra texts senere"""
