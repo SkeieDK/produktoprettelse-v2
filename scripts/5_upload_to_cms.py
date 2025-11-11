@@ -22,6 +22,10 @@ from ftplib import FTP
 import base64
 import requests
 from tqdm import tqdm
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -158,7 +162,13 @@ class DandomainUploader:
             logger.info(f"[DRY RUN] Would upload {local_path.name} → {self.ftp_image_path}{remote_filename}")
             return f"{self.image_base_url}{remote_filename}"
         
+        ftp = None
         try:
+            # Validate FTP credentials
+            if not self.ftp_host or not self.ftp_user or not self.ftp_password:
+                logger.error("FTP credentials missing - cannot upload image")
+                return None
+            
             # Connect to FTP
             ftp = FTP(self.ftp_host)
             ftp.login(self.ftp_user, self.ftp_password)
@@ -178,6 +188,11 @@ class DandomainUploader:
             
         except Exception as e:
             logger.error(f"Failed to upload image via FTP: {e}")
+            if ftp:
+                try:
+                    ftp.quit()
+                except:
+                    pass
             return None
     
     def upload_pdf_ftp(self, local_path: Path, product_number_clean: str) -> Optional[str]:
@@ -202,7 +217,13 @@ class DandomainUploader:
             logger.info(f"[DRY RUN] Would upload {local_path.name} → {self.ftp_pdf_path}{remote_filename}")
             return f"{self.pdf_base_url}{remote_filename}"
         
+        ftp = None
         try:
+            # Validate FTP credentials
+            if not self.ftp_host or not self.ftp_user or not self.ftp_password:
+                logger.error("FTP credentials missing - cannot upload PDF")
+                return None
+            
             # Connect to FTP
             ftp = FTP(self.ftp_host)
             ftp.login(self.ftp_user, self.ftp_password)
@@ -222,6 +243,11 @@ class DandomainUploader:
             
         except Exception as e:
             logger.error(f"Failed to upload PDF via FTP: {e}")
+            if ftp:
+                try:
+                    ftp.quit()
+                except:
+                    pass
             return None
     
     def map_to_dandomain_schema(self, product: Dict, image_urls: List[str] = None, 
@@ -247,13 +273,18 @@ class DandomainUploader:
         short_desc = product.get('DESC_SHORT', '')
         long_desc = product.get('DESC_LONG', '')
         keywords = product.get('ai_keywords', '')
-        primary_category_id = product.get('primaryCategoryId', '')
+        
+        # Get category - prefer AI categorization result
+        category_number = None
+        if 'ai_categorization' in product and 'category_id' in product['ai_categorization']:
+            category_number = product['ai_categorization']['category_id']
+        elif 'primaryCategoryId' in product:
+            category_number = product['primaryCategoryId']
         
         # Build Dandomain product object
         dandomain_product = {
             "number": product_number,
             "vendorNumber": vendor_number,
-            "primaryCategoryId": primary_category_id,
             
             # Settings (name, descriptions, etc.) - multi-language support
             "settings": {
@@ -268,6 +299,16 @@ class DandomainUploader:
                 ]
             }
         }
+        
+        # Add category if available
+        if category_number:
+            dandomain_product["categories"] = {
+                "items": [
+                    {
+                        "number": str(category_number)
+                    }
+                ]
+            }
         
         # Add images if uploaded
         if image_urls and len(image_urls) > 0:

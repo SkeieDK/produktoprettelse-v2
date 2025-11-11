@@ -269,8 +269,8 @@ Use this example as a guide for tone, structure, and formatting. Adapt it to the
         if response_text.startswith("```"):
             response_text = response_text.strip("`").replace("```json", "").replace("```", "").strip()
         
-        # Parse JSON
-        ai_data = json.loads(response_text)
+        # Parse JSON with strict=False to allow control characters in strings
+        ai_data = json.loads(response_text, strict=False)
         logger.debug(f"  ✓ Agent response parsed successfully")
         
         # Check quality for fallback decision
