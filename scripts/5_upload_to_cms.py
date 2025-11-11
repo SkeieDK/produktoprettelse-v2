@@ -40,7 +40,7 @@ IMAGES_SOURCE_DIR = Path(r"C:\Users\anton\OneDrive - Bunzl Continental Europe\Do
 # Setup logging
 log_file = LOGS_DIR / "5_upload_to_cms.log"
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG to see payload
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file, encoding='utf-8'),
@@ -251,7 +251,7 @@ class DandomainUploader:
             return None
     
     def map_to_dandomain_schema(self, product: Dict, image_urls: List[str] = None, 
-                                pdf_url: Optional[str] = None) -> Dict:
+                                pdf_url: Optional[str] = None) -> Tuple[Dict, Dict]:
         """
         Map our product data to Dandomain API schema
         
@@ -269,46 +269,44 @@ class DandomainUploader:
         vendor_number = str(product.get('ORIGINAL_VENDOR_NUM', '') or product.get('VendorNumber', ''))
         if vendor_number == '':
             vendor_number = ''
-        product_name = product.get('PROD_NAME', '')
+        
+        # Get product name - prefer PROD_NAME, fallback to ORIGINAL_PROD_NAME or DESC_SHORT
+        product_name = product.get('PROD_NAME') or product.get('ORIGINAL_PROD_NAME') or product.get('DESC_SHORT', '')
         short_desc = product.get('DESC_SHORT', '')
         long_desc = product.get('DESC_LONG', '')
         keywords = product.get('ai_keywords', '')
         
-        # Get category - prefer AI categorization result
-        category_number = None
-        if 'ai_categorization' in product and 'category_id' in product['ai_categorization']:
-            category_number = product['ai_categorization']['category_id']
-        elif 'primaryCategoryId' in product:
-            category_number = product['primaryCategoryId']
+        # Get category NUMBER (not ID!) - use primaryCategoryId which contains the category number
+        category_number = product.get('primaryCategoryId', None)
         
-        # Build Dandomain product object
+        # Get other product data
+        cost_price = product.get('PROD_COST_PRICE', 0)
+        weight = product.get('PROD_WEIGHT', '')
+        barcode = product.get('PROD_BARCODE_NUMBER', '')
+        stock_count = product.get('STOCK_COUNT', 0)
+        stock_limit = product.get('STOCK_LIMIT', 0)
+        min_buy = product.get('PROD_MIN_BUY', 1)
+        max_buy = product.get('PROD_MAX_BUY', 0)
+        sort_order = product.get('PROD_SORT', 0)
+        
+        # Build Dandomain product object (basic product data)
         dandomain_product = {
             "number": product_number,
             "vendorNumber": vendor_number,
-            
-            # Settings (name, descriptions, etc.) - multi-language support
-            "settings": {
-                "items": [
-                    {
-                        "name": product_name,
-                        "shortDescription": short_desc,
-                        "longDescription": long_desc,
-                        "keyWords": keywords,
-                        "languageId": 0  # 0 = default language (Danish)
-                    }
-                ]
-            }
+            "costPrice": cost_price,
+            "weight": float(str(weight).replace(',', '.')) if weight else 0,
+            "barCodeNumber": str(barcode) if barcode else "",
+            "stockCount": int(stock_count) if stock_count else 0,
+            "stockLimit": int(stock_limit) if stock_limit else 0,
+            "minBuyAmount": int(min_buy) if min_buy else 1,
+            "maxBuyAmount": int(max_buy) if max_buy else 0,
+            "sortOrder": int(sort_order) if sort_order else 0,
         }
         
-        # Add category if available
+        # Add category if available (using category NUMBER, not ID!)
         if category_number:
-            dandomain_product["categories"] = {
-                "items": [
-                    {
-                        "number": str(category_number)
-                    }
-                ]
-            }
+            dandomain_product["categoriesIds"] = [str(category_number)]
+            dandomain_product["defaultCategoryId"] = str(category_number)
         
         # Add images if uploaded
         if image_urls and len(image_urls) > 0:
@@ -326,20 +324,71 @@ class DandomainUploader:
                 ]
             }
         
+        # Build settings object (to be sent separately)
+        settings_data = {
+            "name": product_name,
+            "shortDescription": short_desc,
+            "longDescription": long_desc,
+            "keyWords": keywords,
+            "languageId": 0  # 0 = default language (Danish)
+        }
+        
         # Add PDF as technical document link if uploaded
         if pdf_url:
-            if "settings" in dandomain_product and "items" in dandomain_product["settings"]:
-                dandomain_product["settings"]["items"][0]["techDocLink"] = pdf_url
-                dandomain_product["settings"]["items"][0]["techDocLinkText"] = "Datablad"
+            settings_data["techDocLink"] = pdf_url
+            settings_data["techDocLinkText"] = "Datablad"
         
-        return dandomain_product
+        return dandomain_product, settings_data
     
-    def create_product(self, product_data: Dict) -> Tuple[bool, Optional[str]]:
+    def create_product_settings(self, product_number: str, settings_data: Dict, site_id: int = 26) -> Tuple[bool, Optional[str]]:
         """
-        Create product via Dandomain API
+        Create/update product settings (name, descriptions, etc.) via separate API endpoint
         
         Args:
-            product_data: Product data in Dandomain schema format
+            product_number: Product number
+            settings_data: Settings data (name, shortDescription, longDescription, etc.)
+            site_id: Site ID (default 26 for Danish site)
+        
+        Returns:
+            (success, error_message)
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would update settings for product: {product_number}")
+            return True, None
+        
+        try:
+            headers = self._create_auth_header()
+            
+            # Settings endpoint: /products/{productNumber}/sites/{siteId}/settings
+            settings_url = f"{self.base_url}/products/{product_number}/sites/{site_id}/settings"
+            
+            response = requests.post(
+                settings_url,
+                headers=headers,
+                json=settings_data,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            
+            logger.info(f"✓ Updated settings for product: {product_number}")
+            return True, None
+            
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"{e.response.status_code} {e.response.reason} for url: {e.response.url}"
+            if e.response.text:
+                error_msg += f" - {e.response.text}"
+            return False, error_msg
+        except Exception as e:
+            return False, str(e)
+    
+    def create_product(self, product_data: Dict, settings_data: Dict = None) -> Tuple[bool, Optional[str]]:
+        """
+        Create product via Dandomain API (in two steps)
+        
+        Args:
+            product_data: Product data in Dandomain schema format (without settings)
+            settings_data: Settings data to be sent separately (optional)
         
         Returns:
             (success, error_message)
@@ -347,10 +396,15 @@ class DandomainUploader:
         if self.dry_run:
             logger.info(f"[DRY RUN] Would create product: {product_data.get('number')}")
             logger.debug(f"[DRY RUN] Payload: {json.dumps(product_data, indent=2)}")
+            if settings_data:
+                logger.debug(f"[DRY RUN] Settings: {json.dumps(settings_data, indent=2)}")
             return True, None
         
         try:
             headers = self._create_auth_header()
+            
+            # Step 1: Create basic product (without settings)
+            logger.debug(f"API Payload: {json.dumps(product_data, indent=2)}")
             
             response = requests.post(
                 self.products_url,
@@ -362,6 +416,16 @@ class DandomainUploader:
             response.raise_for_status()
             
             logger.info(f"✓ Created product: {product_data.get('number')}")
+            
+            # Step 2: Update settings separately if provided
+            if settings_data:
+                success, error = self.create_product_settings(
+                    product_data.get('number'),
+                    settings_data
+                )
+                if not success:
+                    logger.warning(f"⚠️  Product created but settings update failed: {error}")
+            
             return True, None
             
         except requests.exceptions.RequestException as e:
@@ -473,11 +537,11 @@ class DandomainUploader:
         else:
             logger.debug(f"No PDF datablad found for {product_number_clean}")
         
-        # 4. Map to Dandomain schema
-        dandomain_product = self.map_to_dandomain_schema(product, uploaded_image_urls, pdf_url)
+        # 4. Map to Dandomain schema (returns product data + settings separately)
+        dandomain_product, settings_data = self.map_to_dandomain_schema(product, uploaded_image_urls, pdf_url)
         
-        # 5. Create product via API
-        success, error = self.create_product(dandomain_product)
+        # 5. Create product via API (in two steps: product + settings)
+        success, error = self.create_product(dandomain_product, settings_data)
         
         if success:
             result['status'] = 'success'
