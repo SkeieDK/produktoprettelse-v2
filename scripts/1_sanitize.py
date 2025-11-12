@@ -187,15 +187,15 @@ def main():
         processed_df.to_csv(output_csv, index=False, encoding='utf-8')
         logger.info(f"✓ Sanitized CSV: {output_csv}")
         
-        # 2. JSON for scraper (to cache for backward compat)
-        json_output = cache_dir / "processed_products.json"
+        # 2. JSON output (main location: output_dir)
+        json_output = output_dir / f"{input_csv.stem}_processed.json"
         sanitizer.to_json(str(json_output))
         logger.info(f"✓ JSON output: {json_output}")
         
-        # 3. Also save to output directory
-        json_output_copy = output_dir / f"{input_csv.stem}_processed.json"
-        sanitizer.to_json(str(json_output_copy))
-        logger.info(f"✓ JSON copy: {json_output_copy}")
+        # 3. Also copy to cache for backward compatibility with Step 2 & 3
+        cache_json = cache_dir / "processed_products.json"
+        sanitizer.to_json(str(cache_json))
+        logger.info(f"✓ Cache copy: {cache_json}")
         
     except Exception as e:
         logger.error(f"Failed to write outputs: {e}", exc_info=True)

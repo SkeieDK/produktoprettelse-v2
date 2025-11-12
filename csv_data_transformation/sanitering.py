@@ -100,14 +100,6 @@ class CSVSanitering:
             "ConvertedSystemCost": float,
             "TotalStockQty": "Int64"  # Pandas extension type for nullable integer
         }
-        # Float-felter konverteres som før
-        type_map = {
-            "NetWeight": float,
-            "GreenTax": float,
-            "UnitConvStockPurch": float,
-            "ConvertedSystemCost": float,
-            "TotalStockQty": "Int64"  # Pandas extension type for nullable integer
-        }
         for col, dtype in type_map.items():
             if col in self.df.columns and col not in ["NetWeight", "PROD_WEIGHT"]:
                 if dtype == float:
@@ -142,9 +134,9 @@ class CSVSanitering:
         return self.df
 
     def add_flerstk_pris(self):
-        # Tilføj kolonne "Flerstk. pris" baseret på M kode
-        if "ConvertedSystemCost" in self.df.columns:
-            self.df["Flerstk. pris"] = ((self.df["ConvertedSystemCost"] / (1-0.5)) / 0.25).round(0) * 0.25
+        # Tilføj kolonne "Flerstk. pris" baseret på PROD_COST_PRICE (som inkluderer 10% markup for mln)
+        if "PROD_COST_PRICE" in self.df.columns:
+            self.df["Flerstk. pris"] = ((self.df["PROD_COST_PRICE"] / (1-0.5)) / 0.25).round(0) * 0.25
         return self.df
 
     def add_besparelse(self):
@@ -283,25 +275,51 @@ class CSVSanitering:
         self.df["PROD_UNIT_ID"] = self.df.apply(map_unit, axis=1)
         return self.df
 
-    def decode_certifications(self):
-        """Add FIELD_2: Decode certification codes using miljomaerke_tabel
-        Searches for matching codes in Certifications field
-        """
-        def find_certification(code_text):
-            if pd.isna(code_text) or not isinstance(code_text, str) or not code_text.strip():
-                return None
-            
-            table = self.LOOKUP_TABLES.get("miljomaerke", {})
-            
-            # Check each code in the table for matches in code_text
-            for code, certification in table.items():
-                if code in code_text:
-                    return certification
-            
-            return None
+    def convert_unit_ids(self):
+        """Convert SalesUnitID and StockUnitID from text codes to numeric IDs using enheds_numerering_tabel"""
+        table = self.LOOKUP_TABLES.get("enheds_numerering", {})
         
-        if "Certifications" in self.df.columns:
-            self.df["FIELD_2"] = self.df["Certifications"].apply(find_certification)
+        def convert_unit(unit_text):
+            if pd.isna(unit_text):
+                return unit_text
+            unit_str = str(unit_text).strip()
+            # Look up the numeric ID from the table
+            # The table maps numeric ID -> text code (e.g., "6" -> "krt")
+            # We need to reverse lookup: find numeric ID where value matches unit_str
+            for numeric_id, code in table.items():
+                if code == unit_str:
+                    return numeric_id
+            return unit_text  # Return as-is if not found
+        
+        if "SalesUnitID" in self.df.columns:
+            self.df["SalesUnitID"] = self.df["SalesUnitID"].apply(convert_unit)
+        if "StockUnitID" in self.df.columns:
+            self.df["StockUnitID"] = self.df["StockUnitID"].apply(convert_unit)
+        return self.df
+
+    def convert_code_to_certification(self):
+        """Convert Code column from miljomaerke codes to certification names using miljomaerke_tabel"""
+        table = self.LOOKUP_TABLES.get("miljomaerke", {})
+        
+        def lookup_certification(code):
+            if pd.isna(code) or not isinstance(code, str) or not code.strip():
+                return code
+            code_str = code.strip()
+            # Look up the certification name from the table
+            result = table.get(code_str)
+            return result if result else code
+        
+        if "Code" in self.df.columns:
+            self.df["Code"] = self.df["Code"].apply(lookup_certification)
+        return self.df
+
+    def add_field_2(self):
+        """Add FIELD_2: Copy the certification name from Code column
+        Note: Code is already converted from code (e.g., "A02") to name (e.g., "Egnet til fødevarekontakt")
+        by convert_code_to_certification() in Phase 3
+        """
+        if "Code" in self.df.columns:
+            self.df["FIELD_2"] = self.df["Code"]
         return self.df
 
     def convert_unit_formats(self):
@@ -500,8 +518,10 @@ class CSVSanitering:
         self.normalize_vendors()
         self.add_packing_info()
         self.parse_unit_description()
+        self.convert_unit_ids()  # Convert SalesUnitID and StockUnitID to numeric IDs
+        self.convert_code_to_certification()  # Convert Code column to certification names
         self.map_unit_ids()
-        self.decode_certifications()
+        self.add_field_2()
         self.convert_unit_formats()
         self.apply_constants()
         

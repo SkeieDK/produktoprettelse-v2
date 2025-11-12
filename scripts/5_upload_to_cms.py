@@ -333,10 +333,26 @@ class DandomainUploader:
             "languageId": 0  # 0 = default language (Danish)
         }
         
+        # Add metaDescription if available
+        meta_description = product.get('META_DESCRIPTION', '')
+        if meta_description:
+            settings_data["metaDescription"] = meta_description
+        
+        # Add customer fields (FIELD_1 through FIELD_20)
+        customer_fields = {}
+        for i in range(1, 21):
+            field_name = f"FIELD_{i}"
+            field_value = product.get(field_name)
+            if field_value is not None and str(field_value).strip() != '':
+                # Dandomain uses field1, field2, ... naming
+                customer_fields[f"field{i}"] = str(field_value)
+        
+        if customer_fields:
+            settings_data["customerFields"] = customer_fields
+        
         # Add PDF as technical document link if uploaded
         if pdf_url:
             settings_data["techDocLink"] = pdf_url
-            settings_data["techDocLinkText"] = "Datablad"
         
         return dandomain_product, settings_data
     
