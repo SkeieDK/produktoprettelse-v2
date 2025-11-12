@@ -1,0 +1,23 @@
+Virtual Environment Location
+=============================
+
+The Python virtual environment for this project is stored OUTSIDE OneDrive to avoid sync issues.
+
+Location: C:\Users\anton\virtual_environments\produktoprettelse-v2\.venv
+
+Activation:
+  Windows PowerShell:
+    & "C:\Users\anton\virtual_environments\produktoprettelse-v2\.venv\Scripts\Activate.ps1"
+
+  Windows CMD:
+    C:\Users\anton\virtual_environments\produktoprettelse-v2\.venv\Scripts\activate.bat
+
+Why outside OneDrive?
+  - .venv contains thousands of small files that slow down OneDrive sync
+  - Virtual environments are project-specific and can be recreated
+  - Keeping it local improves performance significantly
+
+If you delete the virtual environment:
+  1. Recreate it: python -m venv C:\Users\anton\virtual_environments\produktoprettelse-v2\.venv
+  2. Activate it with the command above
+  3. Install dependencies: pip install -r requirements.txt
