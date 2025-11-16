@@ -117,6 +117,57 @@ class DandomainUploader:
             'Content-Type': 'application/json'
         }
     
+    def _round_price(self, price: float) -> float:
+        """Round price to nearest 0.25 if < 1000, otherwise to nearest integer"""
+        if price < 1000:
+            return round(price / 0.25) * 0.25
+        else:
+            return round(price)
+    
+    def build_price_entries(self, product: Dict) -> List[Dict]:
+        """
+        Build price entries for Dandomain from product data
+        
+        Reads prices already calculated in Step 1 (with MLN markup applied if needed)
+        and formats them for Dandomain API.
+        
+        Returns:
+            List of price entries ready for Dandomain API
+        """
+        # Get prices from product data (already calculated with MLN markup in Step 1)
+        flerstk_pris = float(product.get('Flerstk. pris') or 0)
+        retail_price = float(product.get('Retail_Price') or 0)
+        unit_conv = int(product.get('UnitConvStockPurch') or 3)
+        currency_code = product.get('CURRENCY_CODE', 'DKK')
+        
+        # Prices already have MLN markup applied if needed, just round them
+        flerstk_pris = self._round_price(flerstk_pris)
+        retail_price = self._round_price(retail_price)
+        
+        # Build price entries
+        prices = []
+        
+        # Entry 1: Bulk pricing (quantity = UnitConvStockPurch or 3)
+        bulk_quantity = unit_conv if unit_conv > 1 else 3
+        prices.append({
+            "quantity": bulk_quantity,
+            "unitPrice": flerstk_pris,
+            "currencyCode": currency_code,
+            "b2bGroupId": "-2",
+            "isoCode": 0
+        })
+        
+        # Entry 2: Single unit pricing (quantity = 1)
+        prices.append({
+            "quantity": 1,
+            "unitPrice": retail_price,
+            "currencyCode": currency_code,
+            "b2bGroupId": "-2",
+            "isoCode": 0
+        })
+        
+        return prices
+    
     def check_product_exists(self, product_number: str, vendor_number: str) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """
         Check if product already exists by product number or vendor number using local cache
@@ -333,6 +384,11 @@ class DandomainUploader:
             "languageId": 0  # 0 = default language (Danish)
         }
         
+        # Add retailSalesPrice (from Retail_Price)
+        retail_price = product.get('Retail_Price')
+        if retail_price is not None:
+            settings_data["retailSalesPrice"] = float(retail_price)
+        
         # Add metaDescription if available
         meta_description = product.get('META_DESCRIPTION', '')
         if meta_description:
@@ -356,13 +412,78 @@ class DandomainUploader:
         
         return dandomain_product, settings_data
     
+    def build_price_entries(self, product: Dict) -> List[Dict]:
+        """
+        Build pricing entries for product based on logic:
+        - Apply 10% markup to prices for MLN data area
+        - Create bulk pricing (based on UnitConvStockPurch)
+        - Create single-unit pricing
+        - Apply rounding rules (0.25 DKK for prices < 1000)
+        
+        Returns:
+            List of price dictionaries ready for API upload
+        """
+        product_number = product.get('PROD_NUM', '')
+        currency = product.get('CURRENCY_CODE', 'DKK')
+        language_id = product.get('LANGUAGE_ID', 26)
+        data_area = str(product.get('DataAreaID', '')).lower()
+        
+        # Get base prices
+        cost_price = float(product.get('PROD_COST_PRICE', 0))
+        retail_price = float(product.get('Retail_Price', 0))
+        flerstk_pris = float(product.get('Flerstk. pris', 0))
+        unit_conv = int(product.get('UnitConvStockPurch', 1))
+        
+        # Apply 10% markup for MLN data area
+        if data_area == 'mln':
+            cost_price *= 1.1
+            retail_price *= 1.1
+            flerstk_pris *= 1.1
+        
+        # Rounding function: 0.25 DKK for prices < 1000, otherwise round to nearest integer
+        def round_price(price):
+            if price < 1000:
+                return round(price / 0.25) * 0.25
+            else:
+                return round(price)
+        
+        retail_price = round_price(retail_price)
+        flerstk_pris = round_price(flerstk_pris)
+        
+        prices = []
+        
+        # Entry 1: Bulk pricing (based on UnitConvStockPurch or 3 as fallback)
+        bulk_amount = unit_conv if unit_conv > 1 else 3
+        prices.append({
+            "currencyCode": currency,
+            "b2bGroupId": "-2",
+            "amount": bulk_amount,
+            "unitPrice": flerstk_pris,
+            "quantity": bulk_amount,
+            "isoCode": 0,
+            "languageId": language_id
+        })
+        
+        # Entry 2: Single-unit pricing
+        prices.append({
+            "currencyCode": currency,
+            "b2bGroupId": "-2",
+            "amount": 1,
+            "unitPrice": retail_price,
+            "quantity": 1,
+            "isoCode": 0,
+            "languageId": language_id
+        })
+        
+        return prices
+    
     def create_product_settings(self, product_number: str, settings_data: Dict, site_id: int = 26) -> Tuple[bool, Optional[str]]:
         """
-        Create/update product settings (name, descriptions, etc.) via separate API endpoint
+        Create/update product settings (name, descriptions, retailSalesPrice, etc.) via separate API endpoint
         
         Args:
             product_number: Product number
-            settings_data: Settings data (name, shortDescription, longDescription, etc.)
+            settings_data: Settings data (name, shortDescription, longDescription, retailSalesPrice, etc.)
             site_id: Site ID (default 26 for Danish site)
         
         Returns:
@@ -398,13 +519,58 @@ class DandomainUploader:
         except Exception as e:
             return False, str(e)
     
-    def create_product(self, product_data: Dict, settings_data: Dict = None) -> Tuple[bool, Optional[str]]:
+    def create_product_prices(self, product_number: str, price_entries: List[Dict]) -> Tuple[bool, Optional[str]]:
         """
-        Create product via Dandomain API (in two steps)
+        Create/update product prices via separate API endpoint
         
         Args:
-            product_data: Product data in Dandomain schema format (without settings)
+            product_number: Product number
+            price_entries: List of price entries (quantity, unitPrice, currencyCode, b2bGroupId)
+        
+        Returns:
+            (success, error_message)
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would create {len(price_entries)} price entries for product: {product_number}")
+            return True, None
+        
+        try:
+            headers = self._create_auth_header()
+            
+            # Prices endpoint: /products/{productNumber}/prices
+            prices_url = f"{self.base_url}/products/{product_number}/prices"
+            
+            # Send each price entry
+            for idx, price_entry in enumerate(price_entries, 1):
+                response = requests.post(
+                    prices_url,
+                    headers=headers,
+                    json=price_entry,
+                    timeout=30
+                )
+                
+                response.raise_for_status()
+                logger.debug(f"  ✓ Price entry {idx}/{len(price_entries)}: {price_entry['quantity']} @ {price_entry['unitPrice']} {price_entry.get('currencyCode', 'DKK')}")
+            
+            logger.info(f"✓ Created {len(price_entries)} price entries for product: {product_number}")
+            return True, None
+            
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"{e.response.status_code} {e.response.reason} for url: {e.response.url}"
+            if e.response.text:
+                error_msg += f" - {e.response.text}"
+            return False, error_msg
+        except Exception as e:
+            return False, str(e)
+    
+    def create_product(self, product_data: Dict, settings_data: Dict = None, price_entries: List[Dict] = None) -> Tuple[bool, Optional[str]]:
+        """
+        Create product via Dandomain API (in three steps)
+        
+        Args:
+            product_data: Product data in Dandomain schema format (without settings/prices)
             settings_data: Settings data to be sent separately (optional)
+            price_entries: List of price entries to be sent separately (optional)
         
         Returns:
             (success, error_message)
@@ -414,12 +580,14 @@ class DandomainUploader:
             logger.debug(f"[DRY RUN] Payload: {json.dumps(product_data, indent=2)}")
             if settings_data:
                 logger.debug(f"[DRY RUN] Settings: {json.dumps(settings_data, indent=2)}")
+            if price_entries:
+                logger.debug(f"[DRY RUN] Prices: {json.dumps(price_entries, indent=2)}")
             return True, None
         
         try:
             headers = self._create_auth_header()
             
-            # Step 1: Create basic product (without settings)
+            # Step 1: Create basic product (without settings/prices)
             logger.debug(f"API Payload: {json.dumps(product_data, indent=2)}")
             
             response = requests.post(
@@ -441,6 +609,15 @@ class DandomainUploader:
                 )
                 if not success:
                     logger.warning(f"⚠️  Product created but settings update failed: {error}")
+            
+            # Step 3: Create prices separately if provided
+            if price_entries:
+                success, error = self.create_product_prices(
+                    product_data.get('number'),
+                    price_entries
+                )
+                if not success:
+                    logger.warning(f"⚠️  Product created but price upload failed: {error}")
             
             return True, None
             
@@ -556,8 +733,14 @@ class DandomainUploader:
         # 4. Map to Dandomain schema (returns product data + settings separately)
         dandomain_product, settings_data = self.map_to_dandomain_schema(product, uploaded_image_urls, pdf_url)
         
-        # 5. Create product via API (in two steps: product + settings)
-        success, error = self.create_product(dandomain_product, settings_data)
+        # 5. Build pricing entries (bulk + single-unit with MLN markup and rounding)
+        price_entries = self.build_price_entries(product)
+        price_summary = ', '.join([f'{p["quantity"]}x {p["unitPrice"]} {p.get("currencyCode", "DKK")}' for p in price_entries])
+        logger.info(f"Price entries ({len(price_entries)}): {price_summary}")
+        result['prices'] = price_entries
+        
+        # 6. Create product via API (in three steps: product + settings + prices)
+        success, error = self.create_product(dandomain_product, settings_data, price_entries)
         
         if success:
             result['status'] = 'success'

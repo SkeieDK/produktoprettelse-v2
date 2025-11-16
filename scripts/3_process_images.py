@@ -199,10 +199,19 @@ def process_images(logger, config):
         # Merge metadata from original processed data
         if product_num in processed_by_prod_num:
             processed_row = processed_by_prod_num[product_num]
-            # Add all metadata fields from processed (don't override existing supplier data)
+            # List of important fields to preserve from processed data (prices, metadata, etc.)
+            important_fields = {
+                "PROD_NUM", "PROD_NUM_old", "PROD_COST_PRICE", "Retail_Price", "Flerstk. pris", 
+                "Besparelse", "PROD_WEIGHT", "PROD_BARCODE_NUMBER", "STOCK_COUNT", "PROD_MIN_BUY",
+                "PROD_MAX_BUY", "PROD_SORT", "PROD_HIDDEN", "PROD_FRONT_PAGE", "PROD_DELIVERY",
+                "PROD_DELIVERY_NOT_IN_STOCK", "PROD_NEW", "PROD_SHOW_ON_GOOGLE_FEED",
+                "PROD_SHOW_ON_FACEBOOK_FEED", "PROD_SHOW_ON_PRICERUNNER_FEED",
+                "FIELD_1", "FIELD_2", "FIELD_17", "FIELD_18", "FIELD_20",
+                "SalesUnitID", "StockUnitID", "DataAreaID", "UnitConvStockPurch"
+            }
+            # Add all fields from processed (prefer processed over scraped for these fields)
             for key, value in processed_row.items():
-                # Skip keys that are already in supplier_data (keep scraped data)
-                if key not in product or key in ["PROD_NUM", "PROD_NUM_old"]:
+                if key in important_fields or key not in product:
                     product[key] = value
             logger.debug(f"  Merged metadata from processed products")
         

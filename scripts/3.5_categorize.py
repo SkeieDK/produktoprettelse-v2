@@ -688,6 +688,9 @@ def process_products(
                 stats['low_confidence'] += 1
                 logger.warning(f"  [WARN] Low confidence ({conf}%): Category {result['category_id']}")
         
+        # Add categorization result to product
+        product['ai_categorization'] = result
+        product['primaryCategoryId'] = result.get('category_id')
         categorized_products.append(product)
         
         # Rate limiting
