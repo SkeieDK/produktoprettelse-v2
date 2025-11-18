@@ -10,79 +10,260 @@ from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 import logging
 from tqdm import tqdm
+from urllib.parse import quote
 
-class APIManager:
-    """Centraliseret API manager for eksterne data sources"""
-    def __init__(self):
-        self.api_key = os.getenv('API_KEY')
-        self.api_username = os.getenv('API_USERNAME', '')  # Optional username
-        if not self.api_key:
-            raise ValueError("API_KEY miljøvariabel ikke fundet!")
-        # Base URLs
-        self.category_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/categories"
-        self.product_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products"
-        # Cache directory
-        self.cache_dir = Path(__file__).parent / "cache"
-        self.cache_dir.mkdir(exist_ok=True)
-        # Log directory
-        self.log_dir = Path(__file__).parent / "logs"
-        self.log_dir.mkdir(exist_ok=True)
-        log_file_path = self.log_dir / "api_manager.log"
-        # Setup logging
-        self.logger = logging.getLogger("APIManager")
-        self.logger.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-        # Stream handler (console)
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        # File handler (log file)
-        file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        # Avoid duplicate handlers
-        if not self.logger.hasHandlers():
-            self.logger.addHandler(stream_handler)
-            self.logger.addHandler(file_handler)
-        else:
-            self.logger.handlers.clear()
-            self.logger.addHandler(stream_handler)
-            self.logger.addHandler(file_handler)
+class BaseAPI:
+    """Base class for shared API logic."""
+    def __init__(self, make_request, logger, cache_dir=None):
+        self._make_request = make_request
+        self.logger = logger
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+
+class ProductAPI(BaseAPI):
+    """Handles product-related API calls."""
+    def __init__(self, make_request, logger, product_url, cache_dir):
+        super().__init__(make_request, logger, cache_dir)
+        self.product_url = product_url
+
+    def get_all_products(
+        self,
+        use_cache: bool = True,
+        cache_hours: int = 24,
+        include_settings: bool = True,
+        include_prices: bool = False,
+        include_categories: bool = False,
+    ) -> List[Dict]:
+        """
+        Hent alle produkter fra API med paginering
+        """
+        # Use separate cache file if prices are included
+        cache_filename = "products_prices_cache.json" if include_prices else "products_cache.json"
+        cache_file = self.cache_dir / cache_filename if self.cache_dir else None
+        
+        # Tjek cache først
+        if use_cache and cache_file and cache_file.exists():
+            cache_age = time.time() - cache_file.stat().st_mtime
+            if cache_age < (cache_hours * 3600):
+                self.logger.info(f"Bruger cached produkt data ({cache_age/3600:.1f} timer gammel)")
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        self.logger.info("Henter produkter fra API...")
+        all_products = []
+        offset = 0
+        limit = 100  # API max er 100
+        
+        with tqdm(desc="Henter produkter", unit="batch") as pbar:
+            while True:
+                params: Dict[str, Union[int, str]] = {
+                    'limit': limit,
+                    'offset': offset
+                }
+                
+                # Build include string
+                includes = []
+                if include_settings:
+                    includes.append('settings')
+                if include_prices:
+                    includes.append('prices')
+                if include_categories:
+                    includes.append('categories')
+                
+                if includes:
+                    params['include'] = ','.join(includes)
+                
+                self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
+                response = self._make_request(self.product_url, params)
+                items = response.get('items', [])
+                if not items:
+                    break
+                all_products.extend(items)
+                pbar.update(1)
+                # Tjek om der er flere
+                has_more = response.get('hasMore', False)
+                if not has_more:
+                    break
+                offset += limit
+                time.sleep(0.1)
+        self.logger.info(f"Hentet {len(all_products)} produkter i alt")
+        # Gem til cache
+        if cache_file:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(all_products, f, ensure_ascii=False, indent=2)
+        return all_products
+
+    def update_product(self, product_number: str, payload: Dict) -> bool:
+        """Apply partial update to a product."""
+        url = f"{self.product_url}/{product_number}"
+        try:
+            self._make_request(url, method="PATCH", json_data=payload)
+            self.logger.info(f"Patched product {product_number}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to patch product {product_number}: {e}")
+            return False
+
+    def process_product_data(self, products: List[Dict]) -> List[Dict]:
+        """
+        Process produkt data til samme format som M koden forventer
+        """
+        processed_products = []
+        
+        for product in products:
+            # Extract text fields (name, descriptions, meta)
+            text_data = self._extract_product_texts(product)
+            
+            # Extract price info
+            price_info = self._extract_price_info(product)
+            
+            # Map API felter til M kode kolonner
+            processed_product = {
+                # Basis produkt info
+                'ItemID': product.get('number', ''),
+                'ItemName': text_data.get('name', product.get('number', '')),
+                'ItemBarcode': product.get('barCodeNumber', ''),
+                'VendorNumber': product.get('vendorNumber', ''),
+                'ConvertedSystemCost': product.get('costPrice', 0),
+                'NetWeight': product.get('weight', 0),
+                'TotalStockQty': product.get('stockCount', 0),
+                
+                # Price fields
+                'UnitPrice': price_info.get('unitPrice', 0.0),
+                'SpecialOfferPrice': price_info.get('specialOfferPrice', 0.0),
+                'PriceCurrency': price_info.get('currencyCode', 'DKK'),
+                
+                # Text/Description fields (from settings API structure)
+                'name': text_data.get('name', ''),
+                'shortDescription': text_data.get('shortDescription', ''),
+                'longDescription': text_data.get('longDescription', ''),
+                'longDescription2': text_data.get('longDescription2', ''),
+                'keyWords': text_data.get('keyWords', ''),
+                'metaDescription': text_data.get('metaDescription', ''),
+                'pageTitle': text_data.get('pageTitle', ''),
+                'urlName': text_data.get('urlName', ''),
+                
+                # Dandomain specifikke felter
+                'MinBuyAmount': product.get('minBuyAmount', 1),
+                'MaxBuyAmount': product.get('maxBuyAmount', 0),
+                'AllowPreOrder': product.get('allowPreOrder', False),
+                'AllowBackOrder': product.get('allowBackOrder', False),
+                'BackOrderAvailabilityDays': product.get('backOrderAvailabilityDays', 0),
+                'StockLimit': product.get('stockLimit', 0),
+                'SortOrder': product.get('sortOrder', 100),
+                'TypeId': product.get('typeId', 88),
+                
+                # Feed indstillinger
+                'ShowOnGoogleFeed': product.get('showOnGoogleFeed', False),
+                'ShowOnFacebookFeed': product.get('showOnFacebookFeed', False),
+                'ShowOnPricerunnerFeed': product.get('showOnPricerunnerFeed', True),
+                'ShowOnKelkooFeed': product.get('showOnKelkooFeed', True),
+                
+                # Kategori info
+                'DefaultCategoryId': product.get('defaultCategoryId', ''),
+                'PrimaryCategoryId': product.get('primaryCategoryId', ''),
+                
+                # Metadata
+                'CreatedDate': product.get('createdDate', ''),
+                'EditedDate': product.get('editedDate', ''),
+                'PictureLink': product.get('pictureLink', ''),
+                'Comments': product.get('comments', ''),
+                
+                # Kategorier (hvis inkluderet)
+                'Categories': self._extract_product_categories(product)
+            }
+            
+            processed_products.append(processed_product)
+        
+        return processed_products
     
-    def _create_auth_string(self) -> str:
-        """Opret korrekt Base64 encoded auth string"""
-        import base64
+    def _extract_price_info(self, product: Dict) -> Dict:
+        """Helper to find the default B2C price (qty 1)"""
+        prices = product.get('prices', {}).get('items', [])
+        if not prices:
+            return {}
+            
+        # Find default price: usually quantity=1 and no specific B2B group (or default group)
+        # Adjust logic based on your specific B2B/B2C setup
+        for p in prices:
+            if p.get('quantity', 0) == 1 and p.get('currencyCode') == 'DKK':
+                return {
+                    'unitPrice': p.get('unitPrice', 0.0),
+                    'specialOfferPrice': p.get('specialOfferPrice', 0.0),
+                    'currencyCode': p.get('currencyCode')
+                }
         
-        # API format er ":apikey" (colon + apikey) som base64 encoded
-        auth_text = f":{self.api_key}"
-        
-        # Base64 encode
-        return base64.b64encode(auth_text.encode('utf-8')).decode('utf-8')
-        
-    def _make_api_request(self, url: str, params: Optional[Dict[str, Any]] = None, timeout: int = 30) -> Dict:
-        """Generisk API request med error handling"""
-        # Opret korrekt Basic Auth header
-        auth_string = self._create_auth_string()
-        
-        headers = {
-            'accept': 'text/plain',
-            'Authorization': f'Basic {auth_string}'
+        # Fallback to first price if no exact match
+        return prices[0] if prices else {}
+
+    def _extract_product_texts(self, product: Dict) -> Dict[str, str]:
+        """
+        Extract text fields from product's settings structure.
+        """
+        text_data = {
+            'name': '',
+            'shortDescription': '',
+            'longDescription': '',
+            'longDescription2': '',
+            'keyWords': '',
+            'metaDescription': '',
+            'pageTitle': '',
+            'urlName': ''
         }
         
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"API request fejlede: {e}")
-        except json.JSONDecodeError as e:
-            raise Exception(f"Kunne ikke parse JSON response: {e}")
+        # Check if settings structure exists
+        settings = product.get('settings', {})
+        if isinstance(settings, dict):
+            items = settings.get('items', [])
+            if items and len(items) > 0:
+                # Take first settings item (usually default language)
+                first_setting = items[0]
+                text_data['name'] = first_setting.get('name', '')
+                text_data['shortDescription'] = first_setting.get('shortDescription', '')
+                text_data['longDescription'] = first_setting.get('longDescription', '')
+                text_data['longDescription2'] = first_setting.get('longDescription2', '')
+                text_data['keyWords'] = first_setting.get('keyWords', '')
+                text_data['metaDescription'] = first_setting.get('metaDescription', '')
+                text_data['pageTitle'] = first_setting.get('pageTitle', '')
+                text_data['urlName'] = first_setting.get('urlName', '')
+        
+        return text_data
     
+    def _extract_product_categories(self, product: Dict) -> List[Dict]:
+        """Udtræk kategori information fra produkt"""
+        categories = []
+        
+        if 'categories' in product and 'items' in product['categories']:
+            for cat in product['categories']['items']:
+                category_info = {
+                    'id': cat.get('id'),
+                    'number': cat.get('number'),
+                    'name': self._get_category_name_from_product(cat),
+                    'b2BGroupId': cat.get('b2BGroupId'),
+                    'parentIds': cat.get('parentIds', [])
+                }
+                categories.append(category_info)
+        
+        return categories
+    
+    def _get_category_name_from_product(self, category: Dict) -> str:
+        """Udtræk kategori navn fra product category struktur"""
+        texts = category.get('texts', {}).get('items', [])
+        if texts:
+            return texts[0].get('name', '')
+        return category.get('number', '')
+
+class CategoryAPI(BaseAPI):
+    """Handles category-related API calls."""
+    def __init__(self, make_request, logger, category_url, cache_dir):
+        super().__init__(make_request, logger, cache_dir)
+        self.category_url = category_url
+
     def get_all_categories(self, use_cache: bool = True, cache_hours: int = 24) -> List[Dict]:
         """
         Hent alle produktkategorier fra API med paginering
         """
-        cache_file = self.cache_dir / "categories_cache.json"
+        cache_file = self.cache_dir / "categories_cache.json" if self.cache_dir else None
         # Tjek cache først
-        if use_cache and cache_file.exists():
+        if use_cache and cache_file and cache_file.exists():
             cache_age = time.time() - cache_file.stat().st_mtime
             if cache_age < (cache_hours * 3600):
                 self.logger.info(f"Bruger cached kategori data ({cache_age/3600:.1f} timer gammel)")
@@ -99,7 +280,7 @@ class APIManager:
                     'offset': offset
                 }
                 self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
-                response = self._make_api_request(self.category_api_url, params)
+                response = self._make_request(self.category_url, params)
                 items = response.get('items', [])
                 if not items:
                     break
@@ -113,10 +294,11 @@ class APIManager:
                 time.sleep(0.1)
         self.logger.info(f"Hentet {len(all_categories)} kategorier i alt")
         # Gem til cache
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(all_categories, f, ensure_ascii=False, indent=2)
+        if cache_file:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(all_categories, f, ensure_ascii=False, indent=2)
         return all_categories
-    
+
     def filter_categories(self, categories: List[Dict]) -> List[Dict]:
         """
         Filter kategorier baseret på M kode logik:
@@ -175,202 +357,7 @@ class APIManager:
             processed_categories.append(processed_cat)
         
         return processed_categories
-    
-    def get_all_products(self, use_cache: bool = True, cache_hours: int = 24, include_settings: bool = True) -> List[Dict]:
-        """
-        Hent alle produkter fra API med paginering
-        
-        Args:
-            use_cache: Whether to use cached data
-            cache_hours: How many hours cache is valid
-            include_settings: Whether to include settings (name, descriptions, etc.)
-        """
-        cache_file = self.cache_dir / "products_cache.json"
-        # Tjek cache først
-        if use_cache and cache_file.exists():
-            cache_age = time.time() - cache_file.stat().st_mtime
-            if cache_age < (cache_hours * 3600):
-                self.logger.info(f"Bruger cached produkt data ({cache_age/3600:.1f} timer gammel)")
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        self.logger.info("Henter produkter fra API...")
-        all_products = []
-        offset = 0
-        limit = 100  # API max er 100
-        
-        with tqdm(desc="Henter produkter", unit="batch") as pbar:
-            while True:
-                params: Dict[str, Union[int, str]] = {
-                    'limit': limit,
-                    'offset': offset
-                }
-                
-                # Add settings to include parameter if requested
-                if include_settings:
-                    params['include'] = 'settings'
-                
-                self.logger.debug(f"Henter batch: offset={offset}, limit={limit}")
-                response = self._make_api_request(self.product_api_url, params)
-                items = response.get('items', [])
-                if not items:
-                    break
-                all_products.extend(items)
-                pbar.update(1)
-                # Tjek om der er flere
-                has_more = response.get('hasMore', False)
-                if not has_more:
-                    break
-                offset += limit
-                time.sleep(0.1)
-        self.logger.info(f"Hentet {len(all_products)} produkter i alt")
-        # Gem til cache
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(all_products, f, ensure_ascii=False, indent=2)
-        return all_products
-    
-    def process_product_data(self, products: List[Dict]) -> List[Dict]:
-        """
-        Process produkt data til samme format som M koden forventer
-        """
-        processed_products = []
-        
-        for product in products:
-            # Extract text fields (name, descriptions, meta)
-            text_data = self._extract_product_texts(product)
-            
-            # Map API felter til M kode kolonner
-            processed_product = {
-                # Basis produkt info
-                'ItemID': product.get('number', ''),
-                'ItemName': text_data.get('name', product.get('number', '')),
-                'ItemBarcode': product.get('barCodeNumber', ''),
-                'VendorNumber': product.get('vendorNumber', ''),
-                'ConvertedSystemCost': product.get('costPrice', 0),
-                'NetWeight': product.get('weight', 0),
-                'TotalStockQty': product.get('stockCount', 0),
-                
-                # Text/Description fields (from settings API structure)
-                'name': text_data.get('name', ''),
-                'shortDescription': text_data.get('shortDescription', ''),
-                'longDescription': text_data.get('longDescription', ''),
-                'longDescription2': text_data.get('longDescription2', ''),
-                'keyWords': text_data.get('keyWords', ''),
-                'metaDescription': text_data.get('metaDescription', ''),
-                'pageTitle': text_data.get('pageTitle', ''),
-                'urlName': text_data.get('urlName', ''),
-                
-                # Dandomain specifikke felter
-                'MinBuyAmount': product.get('minBuyAmount', 1),
-                'MaxBuyAmount': product.get('maxBuyAmount', 0),
-                'AllowPreOrder': product.get('allowPreOrder', False),
-                'AllowBackOrder': product.get('allowBackOrder', False),
-                'BackOrderAvailabilityDays': product.get('backOrderAvailabilityDays', 0),
-                'StockLimit': product.get('stockLimit', 0),
-                'SortOrder': product.get('sortOrder', 100),
-                'TypeId': product.get('typeId', 88),
-                
-                # Feed indstillinger
-                'ShowOnGoogleFeed': product.get('showOnGoogleFeed', False),
-                'ShowOnFacebookFeed': product.get('showOnFacebookFeed', False),
-                'ShowOnPricerunnerFeed': product.get('showOnPricerunnerFeed', True),
-                'ShowOnKelkooFeed': product.get('showOnKelkooFeed', True),
-                
-                # Kategori info
-                'DefaultCategoryId': product.get('defaultCategoryId', ''),
-                'PrimaryCategoryId': product.get('primaryCategoryId', ''),
-                
-                # Metadata
-                'CreatedDate': product.get('createdDate', ''),
-                'EditedDate': product.get('editedDate', ''),
-                'PictureLink': product.get('pictureLink', ''),
-                'Comments': product.get('comments', ''),
-                
-                # Kategorier (hvis inkluderet)
-                'Categories': self._extract_product_categories(product)
-            }
-            
-            processed_products.append(processed_product)
-        
-        return processed_products
-    
-    def _extract_product_texts(self, product: Dict) -> Dict[str, str]:
-        """
-        Extract text fields from product's settings structure.
-        
-        API structure: product.settings.items[0] contains name, shortDescription, longDescription, etc.
-        """
-        text_data = {
-            'name': '',
-            'shortDescription': '',
-            'longDescription': '',
-            'longDescription2': '',
-            'keyWords': '',
-            'metaDescription': '',
-            'pageTitle': '',
-            'urlName': ''
-        }
-        
-        # Check if settings structure exists
-        settings = product.get('settings', {})
-        if isinstance(settings, dict):
-            items = settings.get('items', [])
-            if items and len(items) > 0:
-                # Take first settings item (usually default language)
-                first_setting = items[0]
-                text_data['name'] = first_setting.get('name', '')
-                text_data['shortDescription'] = first_setting.get('shortDescription', '')
-                text_data['longDescription'] = first_setting.get('longDescription', '')
-                text_data['longDescription2'] = first_setting.get('longDescription2', '')
-                text_data['keyWords'] = first_setting.get('keyWords', '')
-                text_data['metaDescription'] = first_setting.get('metaDescription', '')
-                text_data['pageTitle'] = first_setting.get('pageTitle', '')
-                text_data['urlName'] = first_setting.get('urlName', '')
-        
-        return text_data
-    
-    def _get_product_name(self, product: Dict) -> str:
-        """Udtræk produkt navn - skal måske hentes fra texts senere"""
-        # For nu returnerer vi product number da navn ikke er i basis API
-        return product.get('number', '')
-    
-    def _extract_product_categories(self, product: Dict) -> List[Dict]:
-        """Udtræk kategori information fra produkt"""
-        categories = []
-        
-        if 'categories' in product and 'items' in product['categories']:
-            for cat in product['categories']['items']:
-                category_info = {
-                    'id': cat.get('id'),
-                    'number': cat.get('number'),
-                    'name': self._get_category_name_from_product(cat),
-                    'b2BGroupId': cat.get('b2BGroupId'),
-                    'parentIds': cat.get('parentIds', [])
-                }
-                categories.append(category_info)
-        
-        return categories
-    
-    def _get_category_name_from_product(self, category: Dict) -> str:
-        """Udtræk kategori navn fra product category struktur"""
-        texts = category.get('texts', {}).get('items', [])
-        if texts:
-            return texts[0].get('name', '')
-        return category.get('number', '')
-    
-    def get_processed_products(self, use_cache: bool = True) -> List[Dict]:
-        """
-        Hent og process alle produkter med fuld API logik
-        Returns:
-            List af processede produkter klar til brug
-        """
-        # Hent alle produkter
-        all_products = self.get_all_products(use_cache)
-        print(f"Processerer {len(all_products)} produkter...")
-        # Process produkter
-        processed_products = self.process_product_data(all_products)
-        print(f"Processeret: {len(processed_products)} produkter")
-        return processed_products
-    
+
     def _get_category_name(self, category: Dict) -> str:
         """Udtræk kategori navn fra texts struktur"""
         texts = category.get('texts', {}).get('items', [])
@@ -454,48 +441,215 @@ class APIManager:
         path_parts.append(cat_id)
         
         return " > ".join(path_parts)
+
+class PriceAPI(BaseAPI):
+    """Handles price-related API calls."""
+    def __init__(self, make_request, logger, product_url):
+        super().__init__(make_request, logger)
+        self.product_url = product_url
+
+    def update_product_prices(self, product_number: str, operations: List[Dict[str, Optional[Dict[str, Any]]]]) -> bool:
+        """Apply price mutations for a product."""
+        url = f"{self.product_url}/{product_number}/prices"
+
+        def _prepare_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+            normalised = {k: v for k, v in payload.items() if v is not None}
+            if "unitPrice" in normalised:
+                normalised["unitPrice"] = float(normalised["unitPrice"])
+            if "specialOfferPrice" in normalised and normalised["specialOfferPrice"] is not None:
+                normalised["specialOfferPrice"] = float(normalised["specialOfferPrice"])
+            elif "specialOfferPrice" in normalised:
+                normalised.pop("specialOfferPrice", None)
+            return normalised
+
+        try:
+            for operation in operations:
+                delete_payload = operation.get("delete") if operation else None
+                update_payload = operation.get("update") if operation else None
+                create_payload = operation.get("create") if operation else None
+
+                if delete_payload:
+                    self.logger.warning(f"Preparing to delete prices for {product_number}: {delete_payload}")
+                    if not delete_payload.get("unitPrice"):
+                        self.logger.error(f"Invalid delete payload for {product_number}: {delete_payload}")
+                        continue
+                    prepared_delete = _prepare_payload(delete_payload)
+                    try:
+                        self._make_request(url, method="DELETE", json_data=prepared_delete)
+                    except Exception as delete_error:
+                        message = str(delete_error)
+                        if "404" in message:
+                            self.logger.info(
+                                "Prispost fandtes ikke ved sletning for %s (ignorerer 404)",
+                                product_number,
+                            )
+                        else:
+                            raise
+
+                if update_payload:
+                    prepared_update = _prepare_payload(update_payload)
+                    self._make_request(url, method="PUT", json_data=prepared_update)
+
+                if create_payload:
+                    prepared_create = _prepare_payload(create_payload)
+                    self._make_request(url, method="POST", json_data=prepared_create)
+
+            self.logger.info(f"Updated prices for {product_number}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to update prices for {product_number}: {e}")
+            return False
+
+class APIManager:
+    """Centralized API manager with submodules"""
+    def __init__(self):
+        self.api_key = os.getenv('DANDOMAIN_API_KEY')
+        self.api_username = os.getenv('API_USERNAME', '')  # Optional username
+        if not self.api_key:
+            raise ValueError("DANDOMAIN_API_KEY miljøvariabel ikke fundet!")
+        # Base URLs
+        self.category_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/categories"
+        self.product_api_url = "https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products"
+        # Cache directory
+        self.cache_dir = Path(__file__).parent / "cache"
+        self.cache_dir.mkdir(exist_ok=True)
+        # Log directory
+        self.log_dir = Path(__file__).parent / "logs"
+        self.log_dir.mkdir(exist_ok=True)
+        log_file_path = self.log_dir / "api_manager.log"
+        # Setup logging
+        self.logger = logging.getLogger("APIManager")
+        self.logger.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+        # Stream handler (console)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        # File handler (log file)
+        file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        # Avoid duplicate handlers
+        if not self.logger.hasHandlers():
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
+        else:
+            self.logger.handlers.clear()
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
+        
+        # Debug log to confirm cache directory
+        self.logger.debug(f"Cache directory set to: {self.cache_dir}")
+
+        # Initialize submodules
+        self.product = ProductAPI(self._make_api_request, self.logger, self.product_api_url, self.cache_dir)
+        self.category = CategoryAPI(self._make_api_request, self.logger, self.category_api_url, self.cache_dir)
+        self.price = PriceAPI(self._make_api_request, self.logger, self.product_api_url)
+
+    def _create_auth_string(self) -> str:
+        """Opret korrekt Base64 encoded auth string"""
+        import base64
+        auth_text = f":{self.api_key}"
+        return base64.b64encode(auth_text.encode('utf-8')).decode('utf-8')
+        
+    def _make_api_request(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        method: str = "GET",
+        json_data: Optional[Dict] = None,
+        timeout: int = 30,
+    ) -> Dict:
+        """Generisk API request med error handling"""
+        auth_string = self._create_auth_string()
+        headers = {
+            'accept': 'text/plain',
+            'Authorization': f'Basic {auth_string}'
+        }
+        try:
+            # URL encoding
+            url = quote(url, safe=':/')
+            
+            if method == "GET":
+                response = requests.get(url, headers=headers, params=params, timeout=timeout)
+            elif method == "POST":
+                headers['Content-Type'] = 'application/json'
+                response = requests.post(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            elif method == "PUT":
+                headers['Content-Type'] = 'application/json'
+                response = requests.put(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            elif method == "PATCH":
+                headers['Content-Type'] = 'application/json'
+                response = requests.patch(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            elif method == "DELETE":
+                headers['Content-Type'] = 'application/json'
+                response = requests.delete(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            response.raise_for_status()
+            if not response.content:
+                return {}
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"API request fejlede: {e}")
+        except json.JSONDecodeError as e:
+            raise Exception(f"Kunne ikke parse JSON response: {e}")
+    
+    def _setup_logger(self):
+        pass
+
+    def get_product(
+        self,
+        product_number: str,
+        include_settings: bool = True,
+        include_prices: bool = True,
+        include_categories: bool = True,
+    ) -> Dict:
+        """Fetch single product with optional expansions."""
+        includes: List[str] = []
+        if include_settings:
+            includes.append("settings")
+        if include_prices:
+            includes.append("prices")
+        if include_categories:
+            includes.append("categories")
+        params: Dict[str, str] = {}
+        if includes:
+            params["include"] = ",".join(includes)
+        url = f"{self.product_api_url}/{product_number}"
+        return self._make_api_request(url, params=params)
+    
+    def get_processed_products(self, use_cache: bool = True) -> List[Dict]:
+        """Hent og process alle produkter med fuld API logik"""
+        all_products = self.product.get_all_products(use_cache)
+        print(f"Processerer {len(all_products)} produkter...")
+        processed_products = self.product.process_product_data(all_products)
+        print(f"Processeret: {len(processed_products)} produkter")
+        return processed_products
     
     def get_processed_categories(self, use_cache: bool = True) -> List[Dict]:
-        """
-        Hent og process alle kategorier med fuld Power Query logik
-        
-        Returns:
-            List af processede kategorier klar til brug
-        """
-        # Hent alle kategorier
-        all_categories = self.get_all_categories(use_cache)
-        
+        """Hent og process alle kategorier med fuld Power Query logik"""
+        all_categories = self.category.get_all_categories(use_cache)
         print(f"Processerer {len(all_categories)} kategorier...")
-        
-        # Filtrér baseret på regler
-        filtered_categories = self.filter_categories(all_categories)
+        filtered_categories = self.category.filter_categories(all_categories)
         print(f"Filtreret: {len(filtered_categories)} kategorier")
-        
-        # Process hierarki
-        processed_categories = self.process_category_hierarchy(filtered_categories)
+        processed_categories = self.category.process_category_hierarchy(filtered_categories)
         print(f"Processeret: {len(processed_categories)} kategorier")
-        
         return processed_categories
     
     def clear_cache(self, cache_type: str = "all"):
-        """
-        Ryd API cache
-        
-        Args:
-            cache_type: "all", "categories", "products", eller "products_no_cats"
-        """
+        """Ryd API cache filer."""
         cache_files = []
-        
         if cache_type in ["all", "categories"]:
             cache_files.append(self.cache_dir / "categories_cache.json")
-        
+            cache_files.append(self.cache_dir / "categories_with_products.json")
         if cache_type in ["all", "products"]:
+            cache_files.append(self.cache_dir / "products_cache.json")
+            cache_files.append(self.cache_dir / "products_prices_cache.json")
             cache_files.append(self.cache_dir / "products_cache_with_cats.json")
             cache_files.append(self.cache_dir / "products_cache_no_cats.json")
-        
-        if cache_type == "products_no_cats":
-            cache_files.append(self.cache_dir / "products_cache_no_cats.json")
-        
+        if cache_type == "products_prices":
+            cache_files.append(self.cache_dir / "products_prices_cache.json")
         for cache_file in cache_files:
             if cache_file.exists():
                 cache_file.unlink()
@@ -506,7 +660,9 @@ class APIManager:
         cache_info = {}
         cache_files = [
             "categories_cache.json",
-            "products_cache.json"
+            "categories_with_products.json",
+            "products_cache.json",
+            "products_prices_cache.json"
         ]
         for filename in cache_files:
             cache_file = self.cache_dir / filename
@@ -521,12 +677,124 @@ class APIManager:
                 cache_info[filename] = {'exists': False}
         return cache_info
 
+    def refresh_all_caches(self) -> Dict[str, Any]:
+        """Hent og opdater alle cache filer fra Dandomain API."""
+        stats: Dict[str, Any] = {}
+        self.logger.info("Starter fuld dataopdatering fra API")
+        self.clear_cache("all")
+        categories = self.category.get_all_categories(use_cache=False)
+        stats["total_categories"] = len(categories)
+        products = self.product.get_all_products(use_cache=False, include_prices=False, include_categories=True)
+        stats["total_products"] = len(products)
+        products_with_prices = self.product.get_all_products(use_cache=False, include_prices=True, include_categories=True)
+        stats["total_products_with_prices"] = len(products_with_prices)
+        
+        category_numbers_with_products = set()
+        for product in products:
+            primary = product.get('primaryCategoryId')
+            default = product.get('defaultCategoryId')
+            if primary:
+                category_numbers_with_products.add(str(primary))
+            if default:
+                category_numbers_with_products.add(str(default))
+            categories_rel = product.get('categories', {}).get('items', []) if isinstance(product.get('categories'), dict) else []
+            for cat in categories_rel:
+                number = cat.get('number')
+                if number:
+                    category_numbers_with_products.add(str(number))
+
+        # Ensure all categories are included in the cache
+        for product in products:
+            product['allCategories'] = [cat.get('number') for cat in product.get('categories', {}).get('items', []) if cat.get('number')]
+
+        # Write updated products cache
+        products_cache_path = self.cache_dir / "products_cache.json"
+        try:
+            with open(products_cache_path, 'w', encoding='utf-8') as f:
+                json.dump(products, f, ensure_ascii=False, indent=2)
+            self.logger.info(f"Updated products cache written successfully to: {products_cache_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to write updated products cache: {e}")
+        
+        filtered_categories = []
+        # Adjust filtering logic to include only primary categories
+        primary_category_numbers = {str(product.get('primaryCategoryId')) for product in products if product.get('primaryCategoryId')}
+
+        for category in categories:
+            number = category.get('number')
+            if number and str(number) in primary_category_numbers:
+                filtered_categories.append(category)
+            else:
+                self.logger.debug(f"Skipped category not in primary categories: {category}")
+
+        # Log the final filtered categories
+        self.logger.info(f"Filtered primary categories count: {len(filtered_categories)}")
+        
+        filtered_path = self.cache_dir / "categories_with_products.json"
+        self.logger.info(f"Writing filtered categories to: {filtered_path}")
+        # Verify cache directory exists
+        if not self.cache_dir.exists():
+            self.logger.error(f"Cache directory does not exist: {self.cache_dir}")
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Created cache directory: {self.cache_dir}")
+
+        # Debug log for categories and products
+        self.logger.debug(f"Categories fetched: {len(categories)}")
+        self.logger.debug(f"Products fetched: {len(products)}")
+        self.logger.debug(f"Products with prices fetched: {len(products_with_prices)}")
+
+        # Debug log for category numbers with products
+        self.logger.debug(f"Category numbers with products: {category_numbers_with_products}")
+
+        # Debug log for filtered categories
+        self.logger.debug(f"Filtered categories: {len(filtered_categories)}")
+
+        # Ensure file writing is successful
+        try:
+            with open(filtered_path, 'w', encoding='utf-8') as f:
+                json.dump(filtered_categories, f, ensure_ascii=False, indent=2)
+            self.logger.info(f"Filtered categories written successfully to: {filtered_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to write filtered categories: {e}")
+        stats["categories_with_products"] = len(filtered_categories)
+        self.logger.info("Fuld dataopdatering færdig: %s", stats)
+        return stats
+
+    def update_product_prices(self, product_number: str, operations: List[Dict[str, Optional[Dict[str, Any]]]]) -> bool:
+        """Delegate to PriceAPI"""
+        return self.price.update_product_prices(product_number, operations)
+
+    def patch_product(self, product_number: str, payload: Dict) -> bool:
+        """Delegate to ProductAPI"""
+        return self.product.update_product(product_number, payload)
+
+    def update_product_categories(self, product_number: str, category_numbers: List[str]) -> bool:
+        """Replace product categories with provided numbers."""
+        payload = {"categoriesIds": [str(cat) for cat in category_numbers]}
+        return self.patch_product(product_number, payload)
+
+    def update_product_custom_field3(self, product_number: str, language_id: int, value: str) -> bool:
+        """Update CustomField3 for a specific language."""
+        payload = {
+            "settings": {
+                "items": [
+                    {
+                        "languageId": language_id,
+                        "customField3": value or "",
+                    }
+                ]
+            }
+        }
+        return self.patch_product(product_number, payload)
+
+    def get_all_products(self, use_cache: bool = True, include_prices: bool = False, include_categories: bool = False) -> List[Dict]:
+        """Fetch all products with optional expansions."""
+        return self.product.get_all_products(use_cache=use_cache, include_prices=include_prices, include_categories=include_categories)
+
 _api_manager = None
 
 def get_api_manager() -> APIManager:
-    """Lazy-instantiated APIManager. Instantiating at import time previously raised if API_KEY missing,
-    which could terminate processes unexpectedly. This factory defers instantiation until needed.
-    """
+    """Lazy-instantiated APIManager."""
     global _api_manager
     if _api_manager is None:
         _api_manager = APIManager()
@@ -556,38 +824,13 @@ if __name__ == "__main__":
     # Test script
     try:
         print("=== API Manager Test ===")
-        # Test API key
         mgr = get_api_manager()
         if mgr.api_key:
             mgr.logger.info("API_KEY fundet")
         else:
             mgr.logger.error("API_KEY ikke fundet")
             exit(1)
-        # Test kategori hentning
-        categories = mgr.get_processed_categories()
-        if categories:
-            print(f"\nEksempel kategori data:")
-            example = categories[0]
-            for key, value in example.items():
-                print(f"  {key}: {value}")
-            print(f"\nKategori niveau fordeling:")
-            levels = {}
-            for cat in categories:
-                level = cat['kategori_niveau']
-                levels[level] = levels.get(level, 0) + 1
-            for level, count in sorted(levels.items()):
-                print(f"  Niveau {level}: {count} kategorier")
-        # Test produkt hentning
-        print(f"\n=== Test Produkter ===")
-        products = mgr.get_processed_products(use_cache=True)
-        if products:
-            print(f"{len(products)} produkter hentet")
-            # Vis eksempel produkt
-            example_product = products[0]
-            print(f"\nEksempel produkt data:")
-            for key, value in list(example_product.items())[:10]:  # Vis kun første 10 felter
-                print(f"  {key}: {value}")
-        # Vis cache status
+        
         print(f"\n=== Cache Status ===")
         cache_info = mgr.get_cache_info()
         for filename, info in cache_info.items():
@@ -596,13 +839,5 @@ if __name__ == "__main__":
             else:
                 print(f"[X] {filename}: Ikke cached")
     except Exception as e:
-        mgr = None
-        try:
-            mgr = get_api_manager()
-        except Exception:
-            pass
-        if mgr:
-            mgr.logger.error(f"Fejl: {e}")
-        else:
-            import logging
-            logging.error(f"Fejl i test block: {e}")
+        import logging
+        logging.error(f"Fejl i test block: {e}")

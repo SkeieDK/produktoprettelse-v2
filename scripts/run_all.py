@@ -18,7 +18,6 @@ Features:
 
 Usage:
   python scripts/run_all.py                    # Run all steps
-  python scripts/run_all.py --stop-after 2    # Run steps 1-2
   python scripts/run_all.py --verbose          # Show detailed logs
   python scripts/run_all.py --help             # Show options
 """
@@ -125,12 +124,13 @@ def check_output_files() -> dict:
     """Check which output files exist."""
     return {
         "sanitized_csv": bool(list(DATA_OUTPUT.glob("*_sanitized.csv"))),
-        "processed_json": bool((DATA_OUTPUT / "processed_products.json").exists()),
+        "processed_json": bool(list(DATA_OUTPUT.glob("*_processed.json"))),
         "supplier_info": (DATA_OUTPUT / "supplier_info.json").exists(),
         "enriched_products": (DATA_OUTPUT / "enriched_products.json").exists(),
         "categorized_products": (DATA_OUTPUT / "categorized_products.json").exists(),
         "images_dir": (DATA_OUTPUT / "images").exists(),
         "final_products": (DATA_OUTPUT / "final_products.json").exists(),
+        "upload_results": (DATA_OUTPUT / "upload_results.json").exists(),
     }
 
 
@@ -144,9 +144,9 @@ def print_summary_plain(results: list, outputs: dict):
     print("\n" + "=" * 60)
     print("PIPELINE SUMMARY")
     print("=" * 60)
-    for i, (success, msg) in enumerate(results, 1):
+    for step_num, success, msg in results:
         status = "[OK] Success" if success else "[FAIL] Failed"
-        print(f"Step {i}: {status}")
+        print(f"Step {step_num}: {status}")
     print("\nOutput files:")
     for name, exists in outputs.items():
         status = "[OK]" if exists else "[--]"
@@ -160,8 +160,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                        Run all 4 steps
-  %(prog)s --stop-after 2         Run steps 1-2 only
+  %(prog)s                        Run all 5 steps
   %(prog)s --verbose              Show detailed output
   %(prog)s --stop-after 1 --verbose  Step 1 with details
         """
@@ -170,9 +169,9 @@ Examples:
     parser.add_argument(
         "--stop-after",
         type=str,
-        default="4",
-        choices=["1", "2", "3", "3.5", "4"],
-        help="Stop after this step (default: 4 = all steps)"
+        default="5",
+        choices=["1", "2", "3", "3.5", "4", "5"],
+        help="Stop after this step (default: 5 = all steps)"
     )
     
     parser.add_argument(
@@ -211,6 +210,7 @@ Examples:
         ("3", "3_process_images.py", "Image Processing"),
         ("3.5", "3.5_categorize.py", "AI Categorization"),
         ("4", "4_generate_ai.py", "AI Enrichment"),
+        ("5", "5_upload_to_cms.py", "Upload to CMS"),
     ]
     
     # Convert stop_after to comparable value
@@ -221,7 +221,7 @@ Examples:
             break
         
         success, msg = run_script(step_num, script, title, args.verbose)
-        results.append((success, msg))
+        results.append((step_num, success, msg))
         
         if not success:
             print(f"\nStopping pipeline due to step {step_num} failure")
@@ -232,7 +232,7 @@ Examples:
     print_summary(args.stop_after, results, outputs)
     
     # Exit code: 0 if all ran steps succeeded
-    all_succeeded = all(success for success, _ in results)
+    all_succeeded = all(success for _, success, _ in results)
     return 0 if all_succeeded else 1
 
 

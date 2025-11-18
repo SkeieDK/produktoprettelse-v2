@@ -24,30 +24,50 @@ import requests
 from tqdm import tqdm
 from dotenv import load_dotenv
 
+# Setup paths to allow importing from scripts.utils
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.utils import setup_logging, load_config, atomic_write_json
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Setup paths
-PROJECT_ROOT = Path(__file__).parent.parent
+# PROJECT_ROOT is already defined above
+config_path = PROJECT_ROOT / "config.yaml"
+config = load_config(config_path)
+paths = config.get("paths", {})
+
 DATA_DIR = PROJECT_ROOT / "data"
-DATA_OUTPUT = DATA_DIR / "output"
-LOGS_DIR = PROJECT_ROOT / "logs"
+DATA_OUTPUT = PROJECT_ROOT / paths.get("output_dir", "data/output")
+LOGS_DIR = PROJECT_ROOT / paths.get("logs_dir", "logs")
 LOGS_DIR.mkdir(exist_ok=True)
 
 # Image source directory (1500x1500 processed images)
-IMAGES_SOURCE_DIR = Path(r"C:\Users\anton\OneDrive - Bunzl Continental Europe\Documents - Bonvig\Produktbilleder_1500x1500")
+# Priority:
+# 1. Docker mount point (/mnt/product_images)
+# 2. Environment variable EXTERNAL_IMAGES_DIR
+# 3. Config file value
+# 4. Hardcoded fallback (legacy)
+
+DOCKER_IMAGES_DIR = Path("/mnt/product_images")
+ENV_IMAGES_DIR = os.getenv("EXTERNAL_IMAGES_DIR")
+CONFIG_IMAGES_DIR = paths.get("external_images_dir")
+
+if DOCKER_IMAGES_DIR.exists():
+    IMAGES_SOURCE_DIR = DOCKER_IMAGES_DIR
+elif ENV_IMAGES_DIR and Path(ENV_IMAGES_DIR).exists():
+    IMAGES_SOURCE_DIR = Path(ENV_IMAGES_DIR)
+elif CONFIG_IMAGES_DIR and Path(CONFIG_IMAGES_DIR).exists():
+    IMAGES_SOURCE_DIR = Path(CONFIG_IMAGES_DIR)
+else:
+    # Fallback to the hardcoded path in the script if nothing else works
+    IMAGES_SOURCE_DIR = Path(r"C:\Users\anton\OneDrive - Bunzl Continental Europe\Documents - Bonvig\Produktbilleder_1500x1500")
 
 # Setup logging
-log_file = LOGS_DIR / "5_upload_to_cms.log"
-logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG to see payload
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = setup_logging(LOGS_DIR, "5_upload_to_cms")
+logger.info(f"Using images directory: {IMAGES_SOURCE_DIR}")
 
 
 class DandomainUploader:
@@ -63,13 +83,13 @@ class DandomainUploader:
         self.dry_run = dry_run
         
         # Load credentials from environment
-        self.api_key = os.getenv('API_KEY')
+        self.api_key = os.getenv('DANDOMAIN_API_KEY')
         self.ftp_host = os.getenv('FTP_HOST', '')
         self.ftp_user = os.getenv('FTP_USER', '')
         self.ftp_password = os.getenv('FTP_PASSWORD', '')
         
         if not self.api_key:
-            raise ValueError("API_KEY not found in environment variables!")
+            raise ValueError("DANDOMAIN_API_KEY not found in environment variables!")
         
         if not self.ftp_host or not self.ftp_user or not self.ftp_password:
             logger.warning("FTP credentials not fully configured - image/PDF upload will fail!")
@@ -325,7 +345,8 @@ class DandomainUploader:
         product_name = product.get('PROD_NAME') or product.get('ORIGINAL_PROD_NAME') or product.get('DESC_SHORT', '')
         short_desc = product.get('DESC_SHORT', '')
         long_desc = product.get('DESC_LONG', '')
-        keywords = product.get('ai_keywords', '')
+        # Use PROD_SEARCHWORD if available, otherwise ai_keywords
+        keywords = product.get('PROD_SEARCHWORD') or product.get('ai_keywords', '')
         
         # Get category NUMBER (not ID!) - use primaryCategoryId which contains the category number
         category_number = product.get('primaryCategoryId', None)
@@ -339,11 +360,26 @@ class DandomainUploader:
         min_buy = product.get('PROD_MIN_BUY', 1)
         max_buy = product.get('PROD_MAX_BUY', 0)
         sort_order = product.get('PROD_SORT', 0)
+        type_id = product.get('PROD_TYPE_ID', 0)
+        
+        # Helper for Danish booleans
+        def parse_danish_bool(val):
+            if isinstance(val, bool): return val
+            if str(val).upper() == "SAND": return True
+            if str(val).upper() == "FALSK": return False
+            return False
+
+        # Map boolean fields
+        show_on_google = parse_danish_bool(product.get('PROD_SHOW_ON_GOOGLE_FEED', False))
+        show_on_facebook = parse_danish_bool(product.get('PROD_SHOW_ON_FACEBOOK_FEED', False))
+        show_on_pricerunner = parse_danish_bool(product.get('PROD_SHOW_ON_PRICERUNNER_FEED', False))
+        show_on_kelkoo = parse_danish_bool(product.get('PROD_SHOW_ON_KELKOO_FEED', False))
         
         # Build Dandomain product object (basic product data)
         dandomain_product = {
             "number": product_number,
             "vendorNumber": vendor_number,
+            "unitNumber": int(product.get('ACTIVE_UNIT_ID', 0)) if product.get('ACTIVE_UNIT_ID') else 0,
             "costPrice": cost_price,
             "weight": float(str(weight).replace(',', '.')) if weight else 0,
             "barCodeNumber": str(barcode) if barcode else "",
@@ -352,7 +388,25 @@ class DandomainUploader:
             "minBuyAmount": int(min_buy) if min_buy else 1,
             "maxBuyAmount": int(max_buy) if max_buy else 0,
             "sortOrder": int(sort_order) if sort_order else 0,
+            "typeId": int(type_id) if type_id else 0,
+            "comments": product.get('PROD_NOTES', ''),
+            "showOnGoogleFeed": show_on_google,
+            "showOnFacebookFeed": show_on_facebook,
+            "showOnPricerunnerFeed": show_on_pricerunner,
+            "showOnKelkooFeed": show_on_kelkoo,
         }
+        
+        # Add custom fields (FIELD_1 through FIELD_20)
+        custom_fields = {}
+        for i in range(1, 21):
+            field_name = f"FIELD_{i}"
+            field_value = product.get(field_name)
+            if field_value is not None and str(field_value).strip() != '':
+                # Dandomain uses field1, field2, ... naming
+                custom_fields[f"field{i}"] = str(field_value)
+        
+        if custom_fields:
+            dandomain_product["customFields"] = custom_fields
         
         # Add category if available (using category NUMBER, not ID!)
         if category_number:
@@ -364,16 +418,7 @@ class DandomainUploader:
             # First image as primary picture
             dandomain_product["pictureLink"] = image_urls[0]
             
-            # All images in media gallery
-            dandomain_product["media"] = {
-                "items": [
-                    {
-                        "mediaUrl": url,
-                        "sortOrder": idx
-                    }
-                    for idx, url in enumerate(image_urls)
-                ]
-            }
+            # Note: Additional images are now added via separate endpoint in process_product
         
         # Build settings object (to be sent separately)
         settings_data = {
@@ -381,8 +426,18 @@ class DandomainUploader:
             "shortDescription": short_desc,
             "longDescription": long_desc,
             "keyWords": keywords,
-            "languageId": 0  # 0 = default language (Danish)
+            "languageId": 0,  # 0 = default language (Danish)
+            "isHidden": parse_danish_bool(product.get('PROD_HIDDEN', False)),
         }
+        
+        # Add delivery fields if available
+        delivery_time = product.get('PROD_DELIVERY')
+        if delivery_time:
+            settings_data["deliveryTime"] = str(delivery_time)
+            
+        delivery_not_in_stock = product.get('PROD_DELIVERY_NOT_IN_STOCK')
+        if delivery_not_in_stock:
+            settings_data["deliveryTimeNotInStock"] = str(delivery_not_in_stock)
         
         # Add retailSalesPrice (from Retail_Price)
         retail_price = product.get('Retail_Price')
@@ -393,18 +448,6 @@ class DandomainUploader:
         meta_description = product.get('META_DESCRIPTION', '')
         if meta_description:
             settings_data["metaDescription"] = meta_description
-        
-        # Add customer fields (FIELD_1 through FIELD_20)
-        customer_fields = {}
-        for i in range(1, 21):
-            field_name = f"FIELD_{i}"
-            field_value = product.get(field_name)
-            if field_value is not None and str(field_value).strip() != '':
-                # Dandomain uses field1, field2, ... naming
-                customer_fields[f"field{i}"] = str(field_value)
-        
-        if customer_fields:
-            settings_data["customerFields"] = customer_fields
         
         # Add PDF as technical document link if uploaded
         if pdf_url:
@@ -563,6 +606,52 @@ class DandomainUploader:
         except Exception as e:
             return False, str(e)
     
+    def create_product_media(self, product_number: str, media_url: str, sort_order: int) -> Tuple[bool, Optional[str]]:
+        """
+        Add media (image) to product via separate API endpoint
+        
+        Args:
+            product_number: Product number
+            media_url: URL of the media file
+            sort_order: Sort order of the image
+        
+        Returns:
+            (success, error_message)
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would add media to product {product_number}: {media_url} (order {sort_order})")
+            return True, None
+        
+        try:
+            headers = self._create_auth_header()
+            
+            # Media endpoint: /products/{productNumber}/media
+            media_endpoint = f"{self.base_url}/products/{product_number}/media"
+            
+            payload = {
+                "mediaUrl": media_url,
+                "sortOrder": sort_order
+            }
+            
+            response = requests.post(
+                media_endpoint,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            logger.debug(f"  ✓ Added media: {media_url}")
+            return True, None
+            
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"{e.response.status_code} {e.response.reason} for url: {e.response.url}"
+            if e.response.text:
+                error_msg += f" - {e.response.text}"
+            return False, error_msg
+        except Exception as e:
+            return False, str(e)
+
     def create_product(self, product_data: Dict, settings_data: Dict = None, price_entries: List[Dict] = None) -> Tuple[bool, Optional[str]]:
         """
         Create product via Dandomain API (in three steps)
@@ -675,15 +764,25 @@ class DandomainUploader:
         if product_images:
             logger.info(f"Found {len(product_images)} images to upload")
             for idx, image_path in enumerate(product_images, 1):
-                # Convert relative path to absolute (remove "images/" prefix)
-                image_filename = image_path.replace("images/", "")
+                # Handle absolute paths (Windows or otherwise) by extracting just the filename
+                # This handles "C:/.../file.jpg" -> "file.jpg"
+                # And "images/file.jpg" -> "file.jpg"
+                image_filename = Path(image_path).name
                 
-                # Look in the 1500x1500 processed images folder
+                # Look in the 1500x1500 processed images folder first
                 image_file = IMAGES_SOURCE_DIR / image_filename
                 
+                # Also check data/output/images (app storage)
+                app_image_file = DATA_OUTPUT / "images" / image_filename
+                
                 if image_file.exists():
-                    # Upload with original filename
+                    # Upload from external OneDrive folder
                     image_url = self.upload_image_ftp(image_file)
+                    if image_url:
+                        uploaded_image_urls.append(image_url)
+                elif app_image_file.exists():
+                    # Upload from app storage
+                    image_url = self.upload_image_ftp(app_image_file)
                     if image_url:
                         uploaded_image_urls.append(image_url)
                 else:
@@ -743,6 +842,17 @@ class DandomainUploader:
         success, error = self.create_product(dandomain_product, settings_data, price_entries)
         
         if success:
+            # 7. Add additional images via media endpoint
+            if uploaded_image_urls and len(uploaded_image_urls) > 0:
+                logger.info(f"Adding {len(uploaded_image_urls)} images to media gallery...")
+                for idx, url in enumerate(uploaded_image_urls):
+                    # Skip first image if it's already set as primary pictureLink (optional, but good practice)
+                    # Actually, Dandomain usually wants all images in media gallery too
+                    
+                    media_success, media_error = self.create_product_media(product_number, url, idx)
+                    if not media_success:
+                        logger.warning(f"⚠️  Failed to add image {idx} to gallery: {media_error}")
+            
             result['status'] = 'success'
             result['message'] = 'Product created successfully'
         else:
@@ -803,8 +913,7 @@ def main():
     
     # Save results
     results_file = DATA_OUTPUT / "upload_results.json"
-    with open(results_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    atomic_write_json(results, results_file)
     
     logger.info(f"\nResults saved to: {results_file}")
     

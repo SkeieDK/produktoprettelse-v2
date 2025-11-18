@@ -158,8 +158,15 @@ CATEGORIZATION_FALLBACK_MODEL = "gpt-3.5-turbo"     # Used only if confidence < 
 # ---- STEP 4: AI Enrichment (Descriptions) ----
 # Agents SDK transparently handles both Chat Completions and gpt-5 models
 # GPT-5 models have restrictions: no temperature, uses max_completion_tokens
-ENRICHMENT_PRIMARY_MODEL = "gpt-5-nano"             # Primary: cheapest (~$0.05/1K input)
+ENRICHMENT_PRIMARY_MODEL = "gpt-5-mini"             # Primary: cheapest (~$0.05/1K input)
 ENRICHMENT_FALLBACK_MODEL = "gpt-4o-mini"           # Fallback: proven (~$0.15/1K input)
+REVIEWER_MODEL = "gpt-4o-mini"                      # Reviewer: fast & cheap for validation
+
+# ---- PROMPT PATHS ----
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
+WRITER_SYSTEM_PROMPT = os.path.join(PROMPTS_DIR, "writer_system.md")
+WRITER_TASK_PROMPT = os.path.join(PROMPTS_DIR, "writer_task.md")
+REVIEWER_SYSTEM_PROMPT = os.path.join(PROMPTS_DIR, "reviewer_system.md")
 
 # ---- LEGACY/DEPRECATED ----
 # These are kept for backward compatibility but scripts should use the specific ones above
@@ -224,6 +231,7 @@ PRICING = {
 # SYSTEM PROMPT
 # ============================================================================
 
+# DEPRECATED: Use prompts/writer_system.md instead
 SYSTEM_PROMPT = """You are an expert product description writer for a B2B webshop specializing in professional cleaning and maintenance products. Write in fluent Danish (da-DK). Your task is to generate clear, concise, and professional product descriptions using the provided structured attributes (brand, farve, størrelse, forpakning, certificeringer).
 
 Guidelines:
@@ -245,6 +253,7 @@ Output requirements:
 # USER PROMPT TEMPLATE
 # ============================================================================
 
+# DEPRECATED: Use prompts/writer_task.md instead
 USER_PROMPT_TEMPLATE = """Generate product descriptions in JSON format based on the following information:
 
 Available product details:

@@ -1,38 +1,24 @@
-# Produktoprettelse-v2 Configuration
-# This file controls paths, Chrome settings, and API keys for the pipeline
-
-# Paths (relative to project root)
-paths:
-  input_dir: "data/input"
-  output_dir: "data/output"
-  cache_dir: "data/cache"
-  logs_dir: "logs"
-  
-  # Legacy cache location for products_cache.json (used by sanitize)
-  products_cache: "cache/products_cache.json"
-  
-  # Output images folders
-  images_output: "data/output/images"
-  thumbnails_output: "data/output/images/thumbnails"
-
-# Chrome/Selenium settings
-chrome:
-  binary_path: ""  # Auto-detect if empty; set to explicit path if needed
-  headless: true
-  timeout_seconds: 30
-  retry_without_headless: true
-
-# AI API settings (override with environment variables)
-# NOTE: Model selection has been moved to scripts/ai_config.py (single source of truth)
-# Do NOT configure models here - edit ai_config.py instead!
 ai:
-  api_key: ""  # Set via AI_API_KEY or OPENAI_API_KEY environment variable
-  provider: "openai"  # or "anthropic"
-  # Models are now configured ONLY in scripts/ai_config.py
-  # See ai_config.py for ENRICHMENT_PRIMARY_MODEL, ENRICHMENT_FALLBACK_MODEL, etc.
-
-# Logging
+  api_key: ''
+  provider: openai
+chrome:
+  binary_path: ''
+  headless: true
+  retry_without_headless: true
+  timeout_seconds: 30
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  max_bytes: 10485760  # 10 MB per log file
   backup_count: 3
+  level: INFO
+  max_bytes: 10485760
+paths:
+  cache_dir: data/cache
+  external_images_dir: C:/Users/anton/OneDrive - Bunzl Continental Europe/Documents
+    - Bonvig/Produktbilleder_1500x1500
+  images_output: data/output/images
+  input_dir: data/input
+  logs_dir: logs
+  original_images_dir: C:/Users/anton/OneDrive - Bunzl Continental Europe/Documents
+    - Bonvig/original billeder/Produktbilleder
+  output_dir: data/output
+  products_cache: cache/products_cache.json
+  thumbnails_output: data/output/images/thumbnails

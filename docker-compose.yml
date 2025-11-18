@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    image: produktoprettelse-v2
+    volumes:
+      # Map local data folder to container data folder
+      - ./data:/app/data
+      # Map local logs folder to container logs folder
+      - ./logs:/app/logs
+      # Map config file so you can edit it locally
+      - ./config.yaml:/app/config.yaml
+      # Map prompts folder so you can edit prompts locally
+      - ./prompts:/app/prompts
+      # Map external images folder (configured via EXTERNAL_IMAGES_DIR in .env)
+      - "${EXTERNAL_IMAGES_DIR}:/mnt/product_images"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - APP_PASSWORD=${APP_PASSWORD}
+      # Enable Server Mode: Use local app storage instead of external OneDrive paths
+      - USE_LOCAL_STORAGE=true
+    ports:
+      - "8501:8501"
+    # Run Streamlit app instead of the default pipeline script
+    command: streamlit run app/app.py --server.address=0.0.0.0 

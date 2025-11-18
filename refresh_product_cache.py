@@ -26,7 +26,11 @@ def main():
         print("   Expected time: ~2-5 minutes for 92,000 products\n")
         
         # Fetch with settings included
-        products = mgr.get_all_products(use_cache=False, include_settings=True)
+        products = mgr.get_all_products(
+            use_cache=False,
+            include_settings=True,
+            include_categories=True,
+        )
         
         print(f"\n✅ Successfully cached {len(products):,} products!")
         

@@ -37,111 +37,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ai_config import (
-    get_system_prompt,
-    get_user_prompt,
     get_model_config,
-    ProductDescriptionAgent,
     EMBEDDING_MODEL,
+    WRITER_SYSTEM_PROMPT,
+    WRITER_TASK_PROMPT,
+    REVIEWER_SYSTEM_PROMPT,
+    REVIEWER_MODEL
 )
+from scripts.ai_agents import WriterAgent, ReviewerAgent
 from openai import OpenAI
 import numpy as np
-
-# Safe stream for console output (handles encoding errors)
-class SafeStream:
-    def __init__(self):
-        self.encoding = 'utf-8'
-    
-    def write(self, msg):
-        if not msg:
-            return
-        try:
-            sys.__stdout__.write(msg)
-        except UnicodeEncodeError:
-            try:
-                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
-                sys.__stdout__.write(safe_msg)
-            except Exception:
-                try:
-                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-                    sys.__stdout__.write(safe_msg)
-                except Exception:
-                    pass
-    
-    def flush(self):
-        try:
-            sys.__stdout__.flush()
-        except Exception:
-            pass
-    
-    def isatty(self):
-        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
-
-class SafeStreamHandler(logging.StreamHandler):
-    """Custom logging handler that prevents encoding errors"""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.stream.write(msg)
-            self.stream.write('\n')
-            self.stream.flush()
-        except Exception:
-            self.handleError(record)
-
-def load_config():
-    """Load config.yaml with defaults."""
-    config_path = PROJECT_ROOT / "config.yaml"
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-            if "paths" in config:
-                paths = config["paths"]
-                return {
-                    "paths": {
-                        "input": paths.get("input_dir", "data/input"),
-                        "output": paths.get("output_dir", "data/output"),
-                        "cache": paths.get("cache_dir", "data/cache"),
-                        "logs": paths.get("logs_dir", "logs"),
-                    },
-                    "ai": config.get("ai", {}),
-                    "logging": config.get("logging", {"level": "INFO"})
-                }
-            return config
-    return {
-        "paths": {
-            "input": str(PROJECT_ROOT / "data" / "input"),
-            "output": str(PROJECT_ROOT / "data" / "output"),
-            "cache": str(PROJECT_ROOT / "data" / "cache"),
-            "logs": str(PROJECT_ROOT / "logs"),
-        },
-        "ai": {},
-        "logging": {"level": "INFO"}
-    }
-
-
-def setup_logging(log_dir: Path, log_file_name: str = "4_generate_ai.log"):
-    """Configure logging to file and console"""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / log_file_name
-    
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setFormatter(formatter)
-    
-    console_handler = SafeStreamHandler(SafeStream())
-    console_handler.setFormatter(formatter)
-    
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
+from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def get_api_key(logger, config):
     """Get OpenAI API key from .env, environment, or config."""
@@ -163,12 +69,15 @@ def get_api_key(logger, config):
     return None
 
 
-def call_agent_api(logger, product: Dict[str, Any], agent: ProductDescriptionAgent, system_prompt: str, fallback_agent: Optional[ProductDescriptionAgent] = None, quality_threshold: float = 0.70, example_product: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def call_agent_pipeline(
+    logger, 
+    product: Dict[str, Any], 
+    writer: WriterAgent, 
+    reviewer: ReviewerAgent, 
+    example_product: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     """
-    Call AI agent (Agents SDK handles both Chat Completions and Responses API).
-    
-    Args:
-        example_product: Optional similar product to use as reference example
+    Execute the Writer -> Reviewer pipeline.
     """
     try:
         # Extract fields from product
@@ -216,76 +125,53 @@ def call_agent_api(logger, product: Dict[str, Any], agent: ProductDescriptionAge
         if prod_notes:
             supplier_info = f"{supplier_info}\n\nProdukt noter: {prod_notes}".strip()
         
-        # Build user prompt
-        user_prompt = get_user_prompt(
-            product_name=product_name,
-            category=category,
-            brand=brand,
-            color=color,
-            size=size,
-            packaging=packaging,
-            certifications=certifications,
-            afgift=afgift,
-            supplier_info=supplier_info,
-            product_url=product_url
-        )
+        # Prepare data for template
+        product_data = {
+            "product_name": product_name,
+            "category": category,
+            "brand": brand,
+            "color": color,
+            "size": size,
+            "packaging": packaging,
+            "certifications": certifications,
+            "afgift": afgift,
+            "supplier_info": supplier_info,
+            "product_url": product_url
+        }
         
-        # Add example if provided
+        # Prepare Golden Example if available
+        golden_example = None
         if example_product:
-            example_desc_short = example_product.get("DESC_SHORT", "")
-            example_desc_long = example_product.get("DESC_LONG", "")
-            example_meta = example_product.get("META_DESCRIPTION", "")
-            example_name = example_product.get("ORIGINAL_PROD_NAME", "Similar product")
-            
-            example_text = f"""
-Here is a similar high-quality product description for reference (follow this style and format):
+            golden_example = {
+                "input": f"Product: {example_product.get('ORIGINAL_PROD_NAME')}", # Simplified for few-shot
+                "output": json.dumps({
+                    "DESC_SHORT": example_product.get("DESC_SHORT", ""),
+                    "DESC_LONG": example_product.get("DESC_LONG", ""),
+                    "PROD_SEARCHWORD": example_product.get("PROD_SEARCHWORD", ""),
+                    "META_DESCRIPTION": example_product.get("META_DESCRIPTION", "")
+                })
+            }
+            logger.debug(f"  Using example: {example_product.get('ORIGINAL_PROD_NAME')[:30]}...")
 
-Product: {example_name}
-DESC_SHORT: {example_desc_short}
-DESC_LONG: {example_desc_long}
-META_DESCRIPTION: {example_meta}
-
-Use this example as a guide for tone, structure, and formatting. Adapt it to the current product's specific details.
-"""
-            user_prompt = example_text + "\n\n" + user_prompt
-            logger.debug(f"  Using example: {example_name[:50]}...")
+        # 1. Writer Step
+        logger.debug(f"  Writer ({writer.model}) generating draft...")
+        draft_json_str = writer.generate(product_data, golden_example)
         
-        logger.debug(f"  Calling agent ({agent.model})...")
-        
-        # Call agent (Agents SDK handles Chat Completions vs Responses API automatically)
-        response_text = agent.generate_descriptions(user_prompt, system_prompt)
-        
-        if not response_text:
-            logger.error(f"  Empty response from agent")
+        if not draft_json_str:
+            logger.error("  Writer failed to generate content")
             return None
+            
+        # 2. Reviewer Step
+        logger.debug(f"  Reviewer ({reviewer.model}) validating...")
+        final_json_str = reviewer.review(draft_json_str)
         
-        # Log cost information if available
-        cost = agent.get_last_cost()
-        usage = agent.get_last_usage()
-        if cost:
-            logger.debug(f"  API cost: ${cost:.6f} ({usage['input_tokens']} input + {usage['output_tokens']} output tokens)")
-        
-        # Remove markdown code blocks if present
-        if response_text.startswith("```"):
-            response_text = response_text.strip("`").replace("```json", "").replace("```", "").strip()
-        
-        # Parse JSON with strict=False to allow control characters in strings
-        ai_data = json.loads(response_text, strict=False)
-        logger.debug(f"  ✓ Agent response parsed successfully")
-        
-        # Check quality for fallback decision
-        confidence = ai_data.get("confidence", 0.95)
-        description = ai_data.get("DESC_LONG", "").strip()
-        
-        should_retry = (
-            confidence < quality_threshold or 
-            len(description) < 50
-        )
-        
-        if should_retry and fallback_agent:
-            logger.debug(f"  Quality check failed (confidence: {confidence}, desc_len: {len(description)})")
-            logger.info(f"  Retrying with fallback agent ({fallback_agent.model})...")
-            return call_agent_api(logger, product, fallback_agent, system_prompt, fallback_agent=None, quality_threshold=quality_threshold, example_product=example_product)
+        if not final_json_str:
+            logger.error("  Reviewer failed to validate content")
+            return None
+
+        # Parse Final JSON
+        ai_data = json.loads(final_json_str)
+        logger.debug(f"  ✓ Pipeline completed successfully")
         
         return ai_data
         
@@ -293,16 +179,8 @@ Use this example as a guide for tone, structure, and formatting. Adapt it to the
         logger.error(f"  JSON parse error: {e}")
         return None
     except Exception as e:
-        logger.error(f"  Agent error: {e}")
+        logger.error(f"  Pipeline error: {e}")
         return None
-
-
-def atomic_write_json(file_path, data):
-    """Write JSON atomically: write to .tmp, then rename."""
-    tmp_path = str(file_path) + ".tmp"
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    Path(tmp_path).replace(file_path)
 
 
 # ============================================================================
@@ -389,7 +267,7 @@ def save_example_cache(cache_dir: Path, cache_data: Dict[str, Any]):
     """Save quality scores and embeddings to cache."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "example_quality_cache.json"
-    atomic_write_json(cache_file, cache_data)
+    atomic_write_json(cache_data, cache_file)
 
 
 def get_embedding(client: OpenAI, text: str, model: str = EMBEDDING_MODEL) -> Optional[list]:
@@ -590,8 +468,9 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     Uses Agents SDK which handles Chat Completions and Responses API transparently.
     Includes quality-aware example selection from existing products.
     """
-    output_dir = Path(config["paths"]["output"])
-    cache_dir = Path(config["paths"]["cache"])
+    paths = config.get("paths", {})
+    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
+    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
     
     if input_file:
         enriched_path = Path(input_file)
@@ -608,20 +487,27 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     if not api_key:
         logger.warning("Running in DRY-RUN mode (no API key). Showing mock AI fields.")
         dry_run = True
-        agent = None
-        fallback_agent = None
+        writer_agent = None
+        reviewer_agent = None
         openai_client = None
     else:
         dry_run = False
         try:
             model_config = get_model_config(step="enrichment")
             primary_model = model_config["model"]
-            fallback_model = model_config["fallback_model"]
-            temperature = model_config["temperature"]
             
-            logger.debug(f"Initializing agents: {primary_model} (primary), {fallback_model} (fallback)")
-            agent = ProductDescriptionAgent(model=primary_model, temperature=temperature)
-            fallback_agent = ProductDescriptionAgent(model=fallback_model, temperature=temperature)
+            logger.debug(f"Initializing agents: {primary_model} (Writer), {REVIEWER_MODEL} (Reviewer)")
+            
+            writer_agent = WriterAgent(
+                model=primary_model,
+                system_prompt_path=Path(WRITER_SYSTEM_PROMPT),
+                task_prompt_path=Path(WRITER_TASK_PROMPT)
+            )
+            
+            reviewer_agent = ReviewerAgent(
+                model=REVIEWER_MODEL,
+                system_prompt_path=Path(REVIEWER_SYSTEM_PROMPT)
+            )
             
             # Initialize OpenAI client for embeddings
             openai_client = OpenAI(api_key=api_key)
@@ -633,13 +519,11 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     model_config = get_model_config(step="enrichment")
     
     primary_model = model_config["model"]
-    fallback_model = model_config["fallback_model"]
     quality_threshold = ai_config.get("quality_threshold", 0.70)
-    system_prompt = get_system_prompt()
     
-    logger.info(f"AI Enrichment Setup (Using Agents SDK):")
-    logger.info(f"  Primary model: {primary_model}")
-    logger.info(f"  Fallback model: {fallback_model}")
+    logger.info(f"AI Enrichment Setup (Modular Agents):")
+    logger.info(f"  Writer model: {primary_model}")
+    logger.info(f"  Reviewer model: {REVIEWER_MODEL}")
     logger.info(f"  Quality threshold: {quality_threshold}")
     
     # Load existing products for examples
@@ -727,30 +611,33 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
             }
             logger.info(f"  ✓ Mock AI fields generated")
         else:
-            if agent:
-                ai_data = call_agent_api(
-                    logger, product,
-                    agent=agent,
-                    system_prompt=system_prompt,
-                    fallback_agent=fallback_agent,
-                    quality_threshold=quality_threshold,
+            if writer_agent and reviewer_agent:
+                ai_data = call_agent_pipeline(
+                    logger, 
+                    product,
+                    writer=writer_agent,
+                    reviewer=reviewer_agent,
                     example_product=example_product
                 )
                 if not ai_data:
-                    logger.warning(f"  Skipping product due to agent failure")
+                    logger.warning(f"  Skipping product due to pipeline failure")
                     error_count += 1
                     continue
                 
                 # Track API costs
-                agent_cost = agent.get_last_cost()
-                agent_model = agent.model
-                total_cost += agent_cost
+                writer_cost = writer_agent.last_cost
+                reviewer_cost = reviewer_agent.last_cost
+                total_cost += (writer_cost + reviewer_cost)
                 
-                if agent_model not in cost_by_model:
-                    cost_by_model[agent_model] = 0.0
-                cost_by_model[agent_model] += agent_cost
+                if writer_agent.model not in cost_by_model:
+                    cost_by_model[writer_agent.model] = 0.0
+                cost_by_model[writer_agent.model] += writer_cost
+                
+                if reviewer_agent.model not in cost_by_model:
+                    cost_by_model[reviewer_agent.model] = 0.0
+                cost_by_model[reviewer_agent.model] += reviewer_cost
             else:
-                logger.warning(f"  Agent not available")
+                logger.warning(f"  Agents not available")
                 error_count += 1
                 continue
         
@@ -770,7 +657,7 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     
     # Write final output
     final_path = output_dir / "final_products.json"
-    atomic_write_json(final_path, products)
+    atomic_write_json(products, final_path)
     logger.info(f"✓ Final products JSON: {final_path}")
     
     # Save cost information
@@ -797,8 +684,7 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
                 existing_by_model[model] = round(existing_by_model.get(model, 0.0) + cost, 6)
             cost_summary["cost_by_model"] = existing_by_model
         
-        with open(cost_file, 'w', encoding='utf-8') as f:
-            json.dump(cost_summary, f, ensure_ascii=False, indent=2)
+        atomic_write_json(cost_summary, cost_file)
         logger.info(f"✓ Cost summary saved: {cost_file}")
         logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
     except Exception as e:
@@ -820,8 +706,12 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
 
 def main():
     """Main entry point."""
-    config = load_config()
-    logger = setup_logging(Path(config["paths"]["logs"]))
+    config_path = PROJECT_ROOT / "config.yaml"
+    config = load_config(config_path)
+    paths = config.get("paths", {})
+    log_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
+    
+    logger = setup_logging(log_dir, "4_generate_ai")
     
     logger.info("=" * 60)
     logger.info("Step 4: AI-Powered Product Enrichment")

@@ -24,114 +24,7 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-
-# Safe stream for console output (handles encoding errors)
-class SafeStream:
-    def __init__(self):
-        self.encoding = 'utf-8'
-    
-    def write(self, msg):
-        if not msg:
-            return
-        try:
-            sys.__stdout__.write(msg)
-        except UnicodeEncodeError:
-            try:
-                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
-                sys.__stdout__.write(safe_msg)
-            except Exception:
-                try:
-                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-                    sys.__stdout__.write(safe_msg)
-                except Exception:
-                    pass
-    
-    def flush(self):
-        try:
-            sys.__stdout__.flush()
-        except Exception:
-            pass
-    
-    def isatty(self):
-        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
-
-class SafeStreamHandler(logging.StreamHandler):
-    """Custom logging handler that prevents encoding errors"""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.stream.write(msg)
-            self.stream.write('\n')
-            self.stream.flush()
-        except Exception:
-            self.handleError(record)
-
-def load_config():
-    """Load config.yaml with defaults."""
-    config_path = PROJECT_ROOT / "config.yaml"
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-            # Normalize path keys
-            if "paths" in config:
-                paths = config["paths"]
-                return {
-                    "paths": {
-                        "input": paths.get("input_dir", "data/input"),
-                        "output": paths.get("output_dir", "data/output"),
-                        "cache": paths.get("cache_dir", "data/cache"),
-                        "logs": paths.get("logs_dir", "logs"),
-                    },
-                    "logging": config.get("logging", {"level": "INFO"})
-                }
-            return config
-    return {
-        "paths": {
-            "input": str(PROJECT_ROOT / "data" / "input"),
-            "output": str(PROJECT_ROOT / "data" / "output"),
-            "cache": str(PROJECT_ROOT / "data" / "cache"),
-            "logs": str(PROJECT_ROOT / "logs"),
-        },
-        "logging": {"level": "INFO"}
-    }
-
-
-def setup_logging(log_dir: Path, log_file_name: str = "3_process_images.log"):
-    """Configure logging to file and console"""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / log_file_name
-    
-    # Create formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # File handler (UTF-8)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setFormatter(formatter)
-    
-    # Console handler with SafeStream
-    console_handler = SafeStreamHandler(SafeStream())
-    console_handler.setFormatter(formatter)
-    
-    # Configure root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()  # Remove existing handlers
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
-
-def atomic_write_json(file_path, data):
-    """Write JSON atomically: write to .tmp, then rename."""
-    tmp_path = str(file_path) + ".tmp"
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    Path(tmp_path).replace(file_path)
-
+from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def process_images(logger, config):
     """
@@ -143,14 +36,28 @@ def process_images(logger, config):
     5. Update JSON with relative paths
     6. Write to enriched_products.json
     """
-    output_dir = Path(config["paths"]["output"])
-    cache_dir = Path(config["paths"]["cache"])
+    paths = config.get("paths", {})
+    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
+    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
     
     # Create PDF directory for datablad
     pdfs_dir = output_dir / "pdfs"
     pdfs_dir.mkdir(exist_ok=True)
+    
+    # Determine external PDF directory (sibling to external images dir)
+    external_images_dir_str = paths.get("external_images_dir")
+    external_pdfs_dir = None
+    if external_images_dir_str:
+        try:
+            ext_img_path = Path(external_images_dir_str)
+            # Create 'Datablade' folder next to the images folder
+            external_pdfs_dir = ext_img_path.parent / "Datablade"
+            external_pdfs_dir.mkdir(exist_ok=True)
+            logger.info(f"Using external PDF directory: {external_pdfs_dir}")
+        except Exception as e:
+            logger.warning(f"Could not setup external PDF directory: {e}")
     
     supplier_info_path = output_dir / "supplier_info.json"
     if not supplier_info_path.exists():
@@ -228,24 +135,47 @@ def process_images(logger, config):
         for field in pdf_url_fields:
             pdf_url = product.get(field)
             if pdf_url and str(pdf_url).strip() and not pdf_downloaded:
+                logger.info(f"  Found PDF URL in {field}: {pdf_url}")
                 try:
                     import requests
-                    response = requests.get(str(pdf_url).strip(), timeout=10)
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://www.bunzl.dk/',
+                    }
+                    response = requests.get(str(pdf_url).strip(), headers=headers, timeout=30)
                     response.raise_for_status()
+                    
+                    # Check content type
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' not in content_type and 'application/octet-stream' not in content_type:
+                        logger.warning(f"  Warning: Content-Type is {content_type}, not PDF")
                     
                     # Save PDF with clean product number
                     pdf_path = pdfs_dir / f"{product_num_clean}.pdf"
                     with open(pdf_path, 'wb') as f:
                         f.write(response.content)
                     
-                    logger.info(f"  Downloaded datablad PDF from {field}")
+                    # Copy to external if configured
+                    if external_pdfs_dir and external_pdfs_dir.exists():
+                        try:
+                            copy2(pdf_path, external_pdfs_dir / pdf_path.name)
+                            logger.info(f"  ✓ Copied PDF to external: {external_pdfs_dir}")
+                        except Exception as e:
+                            logger.warning(f"  Failed to copy PDF to external: {e}")
+                    
+                    logger.info(f"  ✓ Downloaded datablad PDF from {field}")
                     pdf_count += 1
                     pdf_downloaded = True
                     break  # Only download one PDF per product
                     
                 except Exception as e:
-                    logger.debug(f"  Failed to download PDF from {field}: {e}")
+                    logger.warning(f"  Failed to download PDF from {field}: {e}")
                     continue
+        
+        if not pdf_downloaded:
+            logger.debug(f"  No PDF downloaded for {product_num}")
         
         if "images" not in product or not product["images"]:
             logger.debug(f"  No images for {product_num}")
@@ -267,15 +197,20 @@ def process_images(logger, config):
                 img_name = img_path.name
                 dest_path = images_dir / img_name
                 
-                # Copy image
-                copy2(img_path, dest_path)
+                # Check if source and destination are the same (can happen in some configs)
+                if img_path.resolve() == dest_path.resolve():
+                    logger.debug(f"  Source and dest are same, skipping copy: {img_name}")
+                else:
+                    # Copy image
+                    copy2(img_path, dest_path)
                 
                 # Verify it's a valid image
                 try:
                     Image.open(dest_path).verify()
                 except Exception as e:
                     logger.warning(f"  Image verification failed: {img_name} - {e}")
-                    dest_path.unlink()  # Remove invalid image
+                    if dest_path.exists() and img_path.resolve() != dest_path.resolve():
+                        dest_path.unlink()  # Remove invalid image
                     continue
                 
                 # Store relative path
@@ -290,12 +225,29 @@ def process_images(logger, config):
         
         # Update product with relative paths
         product["images"] = new_images
+        
+        # Preserve app_images from scraping step if available
+        if "app_images" in product:
+            # Convert app_images to relative paths within data/output/images
+            app_images_rel = []
+            for app_img_path in product.get("app_images", []):
+                app_img = Path(app_img_path)
+                if app_img.exists():
+                    # Copy to output images and create relative path
+                    dest_name = app_img.name
+                    dest_path = images_dir / dest_name
+                    if not dest_path.exists():
+                        copy2(app_img, dest_path)
+                    app_images_rel.append(f"images/{dest_name}")
+            
+            product["app_images"] = app_images_rel
+        
         logger.debug(f"  Updated {len(new_images)} images")
         processed_count += 1
     
     # Write enriched output
     enriched_path = output_dir / "enriched_products.json"
-    atomic_write_json(enriched_path, supplier_data)
+    atomic_write_json(supplier_data, enriched_path)
     logger.info(f"✓ Enriched JSON: {enriched_path}")
     
     logger.info("=" * 60)
@@ -313,8 +265,12 @@ def process_images(logger, config):
 
 def main():
     """Main entry point."""
-    config = load_config()
-    logger = setup_logging(Path(config["paths"]["logs"]))
+    config_path = PROJECT_ROOT / "config.yaml"
+    config = load_config(config_path)
+    paths = config.get("paths", {})
+    logs_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
+    
+    logger = setup_logging(logs_dir, "3_process_images")
     
     logger.info("=" * 60)
     logger.info("Step 3: Image Processing")

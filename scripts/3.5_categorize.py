@@ -33,113 +33,9 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from api_manager import get_categories, get_products, get_cache_status
+from api_manager import get_categories, get_products
 from ai_config import get_model_config, calculate_cost, PRICING
-
-# Safe stream for console output (handles encoding errors)
-class SafeStream:
-    def __init__(self):
-        self.encoding = 'utf-8'
-    
-    def write(self, msg):
-        if not msg:
-            return
-        try:
-            sys.__stdout__.write(msg)
-        except UnicodeEncodeError:
-            try:
-                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
-                sys.__stdout__.write(safe_msg)
-            except Exception:
-                try:
-                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-                    sys.__stdout__.write(safe_msg)
-                except Exception:
-                    pass
-    
-    def flush(self):
-        try:
-            sys.__stdout__.flush()
-        except Exception:
-            pass
-    
-    def isatty(self):
-        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
-
-
-class SafeStreamHandler(logging.StreamHandler):
-    """Custom logging handler that prevents encoding errors"""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.stream.write(msg)
-            self.stream.write('\n')
-            self.stream.flush()
-        except Exception:
-            self.handleError(record)
-
-
-def load_config():
-    """Load config.yaml with defaults."""
-    config_path = PROJECT_ROOT / "config.yaml"
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-            if "paths" in config:
-                paths = config["paths"]
-                return {
-                    "paths": {
-                        "input": paths.get("input_dir", "data/input"),
-                        "output": paths.get("output_dir", "data/output"),
-                        "cache": paths.get("cache_dir", "cache"),
-                        "logs": paths.get("logs_dir", "logs"),
-                    },
-                    "ai": config.get("ai", {}),
-                    "categorization": config.get("categorization", {}),
-                    "logging": config.get("logging", {"level": "INFO"})
-                }
-            return config
-    return {
-        "paths": {
-            "input": str(PROJECT_ROOT / "data" / "input"),
-            "output": str(PROJECT_ROOT / "data" / "output"),
-            "cache": str(PROJECT_ROOT / "cache"),
-            "logs": str(PROJECT_ROOT / "logs"),
-        },
-        "ai": {"provider": "openai", "model": "text-embedding-3-small", "temperature": 0.3},
-        "categorization": {"confidence_threshold": 70, "batch_size": 10},
-        "logging": {"level": "INFO"}
-    }
-
-
-def setup_logging(log_dir: Path, log_file_name: str = "3.5_categorize.log"):
-    """Configure logging to file and console"""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / log_file_name
-    
-    # Create formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # File handler (UTF-8)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setFormatter(formatter)
-    
-    # Console handler with SafeStream
-    console_handler = SafeStreamHandler(SafeStream())
-    console_handler.setFormatter(formatter)
-    
-    # Configure root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
+from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def get_api_key(logger, config):
     """Get OpenAI API key from .env, environment, or config."""
@@ -395,9 +291,7 @@ def load_or_generate_category_embeddings(
     
     # Save to cache
     logger.info(f"Saving category embeddings to cache...")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    with open(cache_file, 'w', encoding='utf-8') as f:
-        json.dump(embeddings, f, ensure_ascii=False, indent=2)
+    atomic_write_json(embeddings, cache_file)
     
     logger.info(f"Category embeddings cached to {cache_file}")
     return embeddings
@@ -494,18 +388,44 @@ def categorize_with_llm_fallback(
     user_prompt = get_category_user_prompt(product, category_tree, include_details=True)
     
     try:
-        response = client.chat.completions.create(
-            model=fallback_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2,
-            max_tokens=300,
-            response_format={"type": "json_object"}
-        )
+        try:
+            response = client.chat.completions.create(
+                model=fallback_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2,
+                max_tokens=300,
+                response_format={"type": "json_object"}
+            )
+        except Exception as e:
+            # Fallback for models that don't support JSON mode
+            if "response_format" in str(e) or "400" in str(e):
+                logger.warning(f"JSON mode failed ({e}), retrying without response_format...")
+                response = client.chat.completions.create(
+                    model=fallback_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt + "\nIMPORTANT: Return raw JSON only."},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=300
+                )
+            else:
+                raise e
         
         result_text = response.choices[0].message.content.strip()
+        
+        # Clean up markdown code blocks if present
+        if result_text.startswith("```json"):
+            result_text = result_text[7:]
+        if result_text.startswith("```"):
+            result_text = result_text[3:]
+        if result_text.endswith("```"):
+            result_text = result_text[:-3]
+        
+        result_text = result_text.strip()
         
         # Parse JSON
         result = json.loads(result_text)
@@ -540,7 +460,8 @@ def process_products(
         Tuple of (categorized_products, cost_tracking_dict)
     """
     confidence_threshold = config.get("categorization", {}).get("confidence_threshold", 70)
-    cache_dir = Path(config["paths"]["cache"])
+    paths = config.get("paths", {})
+    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
     
     # Build category ID to number mapping (for setting primaryCategoryId)
     # categories from API have both 'id' and 'number'
@@ -690,7 +611,6 @@ def process_products(
         
         # Add categorization result to product
         product['ai_categorization'] = result
-        product['primaryCategoryId'] = result.get('category_id')
         categorized_products.append(product)
         
         # Rate limiting
@@ -731,12 +651,14 @@ def main():
     print("="*60 + "\n")
     
     # Load config
-    config = load_config()
-    log_dir = Path(config["paths"]["logs"])
-    output_dir = Path(config["paths"]["output"])
+    config_path = PROJECT_ROOT / "config.yaml"
+    config = load_config(config_path)
+    paths = config.get("paths", {})
+    log_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
+    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
     
     # Setup logging
-    logger = setup_logging(log_dir)
+    logger = setup_logging(log_dir, "3.5_categorize")
     logger.info("Starting embedding-based product categorization...")
     
     # Get API key
@@ -778,12 +700,6 @@ def main():
             categories = json.load(f)
         
         logger.info(f"Loaded {len(categories)} categories from cache")
-        
-        # Show cache status
-        cache_status = get_cache_status()
-        if cache_status.get('categories_cache.json', {}).get('exists'):
-            cache_age = cache_status['categories_cache.json']['age_hours']
-            logger.info(f"Using cached category data ({cache_age:.1f} hours old)")
     except Exception as e:
         logger.error(f"Failed to load categories: {e}")
         print(f"\n[ERROR] Error loading categories: {e}")
@@ -803,10 +719,6 @@ def main():
                 api_products = json.load(f)
             
             logger.info(f"Loaded {len(api_products)} existing products from cache")
-            
-            if cache_status.get('products_cache.json', {}).get('exists'):
-                cache_age = cache_status['products_cache.json']['age_hours']
-                logger.info(f"Using cached product data ({cache_age:.1f} hours old)")
     except Exception as e:
         logger.warning(f"Failed to load products (will continue without examples): {e}")
         api_products = []
@@ -834,8 +746,7 @@ def main():
     output_file = output_dir / "categorized_products.json"
     logger.info(f"Saving categorized products to {output_file}...")
     
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(categorized_products, f, ensure_ascii=False, indent=2)
+    atomic_write_json(categorized_products, output_file)
     
     # Save or update cost information
     cost_summary = {
@@ -868,8 +779,7 @@ def main():
             # Add step-specific metadata
             cost_summary["products_processed"] = existing_costs.get("products_processed", 0) + len(categorized_products)
         
-        with open(cost_file, 'w', encoding='utf-8') as f:
-            json.dump(cost_summary, f, ensure_ascii=False, indent=2)
+        atomic_write_json(cost_summary, cost_file)
         logger.info(f"✓ Cost summary saved: {cost_file}")
         logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
     except Exception as e:

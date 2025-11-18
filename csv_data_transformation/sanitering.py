@@ -501,12 +501,7 @@ class CSVSanitering:
         print("Ingen PROD_NUM fundet i cache, starter fra E100000")
         return "E100000"
 
-    def process(self, cache_path: str = None):
-        import os
-        if cache_path is None:
-            cache_path = os.path.join(os.path.dirname(__file__), '..', 'cache', 'products_cache.json')
-            cache_path = os.path.abspath(cache_path)
-        
+    def process(self, cache_path: str):
         # Phase 1: Type conversions and basic cleanup
         self.change_types()
         self.replace_value("ImageURL", "1XL", "processed")
@@ -540,13 +535,9 @@ class CSVSanitering:
         
         return self.df
 
-    def to_json(self, output_path: str = None) -> str:
-        """Export processed DataFrame to JSON file. No manipulation, just the data as-is."""
+    def to_records(self) -> List[Dict]:
+        """Convert processed DataFrame to list of dictionaries with NaN handling."""
         import numpy as np
-        if output_path is None:
-            output_path = os.path.join(os.path.dirname(__file__), '..', 'cache', 'processed_products.json')
-        
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         # Convert DataFrame to list of dictionaries
         records = self.df.to_dict(orient='records')
@@ -562,13 +553,7 @@ class CSVSanitering:
                     return None
             return obj
         
-        records = replace_nan(records)
-        
-        # Write to JSON
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(records, f, indent=2, ensure_ascii=False)
-        
-        return output_path
+        return replace_nan(records)
 
 if __name__ == "__main__":
     # Eksempel på brug

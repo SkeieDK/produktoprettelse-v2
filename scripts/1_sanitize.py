@@ -26,84 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from csv_data_transformation.sanitering import CSVSanitering
-
-# Safe stream for console output (handles encoding errors)
-class SafeStream:
-    def __init__(self):
-        self.encoding = 'utf-8'
-    
-    def write(self, msg):
-        if not msg:
-            return
-        try:
-            sys.__stdout__.write(msg)
-        except UnicodeEncodeError:
-            try:
-                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
-                sys.__stdout__.write(safe_msg)
-            except Exception:
-                try:
-                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-                    sys.__stdout__.write(safe_msg)
-                except Exception:
-                    pass
-    
-    def flush(self):
-        try:
-            sys.__stdout__.flush()
-        except Exception:
-            pass
-    
-    def isatty(self):
-        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
-
-class SafeStreamHandler(logging.StreamHandler):
-    """Custom logging handler that prevents encoding errors"""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.stream.write(msg)
-            self.stream.write('\n')
-            self.stream.flush()
-        except Exception:
-            self.handleError(record)
-
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console"""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "1_sanitize.log"
-    
-    # Create formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # File handler (UTF-8, no rotation for now)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setFormatter(formatter)
-    
-    # Console handler with SafeStream
-    console_handler = SafeStreamHandler(SafeStream())
-    console_handler.setFormatter(formatter)
-    
-    # Configure root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
-def load_config(config_path: Path) -> dict:
-    """Load config.yaml"""
-    if not config_path.exists():
-        logging.warning(f"Config file not found: {config_path}, using defaults")
-        return {}
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def find_latest_csv(input_dir: Path) -> Path:
     """Find the most recent CSV file in input directory"""
@@ -133,7 +56,7 @@ def main():
     cache_dir.mkdir(parents=True, exist_ok=True)
     
     # Set up logging
-    logger = setup_logging(logs_dir)
+    logger = setup_logging(logs_dir, "1_sanitize")
     
     logger.info("=" * 60)
     logger.info("Step 1: CSV Sanitization")
@@ -189,12 +112,13 @@ def main():
         
         # 2. JSON output (main location: output_dir)
         json_output = output_dir / f"{input_csv.stem}_processed.json"
-        sanitizer.to_json(str(json_output))
+        records = sanitizer.to_records()
+        atomic_write_json(records, json_output)
         logger.info(f"✓ JSON output: {json_output}")
         
         # 3. Also copy to cache for backward compatibility with Step 2 & 3
         cache_json = cache_dir / "processed_products.json"
-        sanitizer.to_json(str(cache_json))
+        atomic_write_json(records, cache_json)
         logger.info(f"✓ Cache copy: {cache_json}")
         
     except Exception as e:

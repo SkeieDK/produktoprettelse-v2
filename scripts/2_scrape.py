@@ -31,84 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import utilities and vendor modules
 from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
 from supplier_pi.utils.image_processor import resize_and_save_all_images
-
-# Safe stream for console output (handles encoding errors)
-class SafeStream:
-    def __init__(self):
-        self.encoding = 'utf-8'
-    
-    def write(self, msg):
-        if not msg:
-            return
-        try:
-            # Try direct write first
-            sys.__stdout__.write(msg)
-        except UnicodeEncodeError:
-            try:
-                # Fallback: encode with error replacement
-                safe_msg = msg.encode('utf-8', errors='replace').decode(sys.__stdout__.encoding or 'utf-8', errors='replace')
-                sys.__stdout__.write(safe_msg)
-            except Exception:
-                # Last resort: ignore errors
-                try:
-                    safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-                    sys.__stdout__.write(safe_msg)
-                except Exception:
-                    pass
-    
-    def flush(self):
-        try:
-            sys.__stdout__.flush()
-        except Exception:
-            pass
-    
-    def isatty(self):
-        return sys.__stdout__.isatty() if hasattr(sys.__stdout__, 'isatty') else False
-
-class SafeStreamHandler(logging.StreamHandler):
-    """Custom logging handler that prevents encoding errors"""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            # Use SafeStream's write method
-            self.stream.write(msg)
-            self.stream.write('\n')
-            self.stream.flush()
-        except Exception:
-            self.handleError(record)
-
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console"""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "2_scrape.log"
-    
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setFormatter(formatter)
-    
-    console_handler = SafeStreamHandler(SafeStream())
-    console_handler.setFormatter(formatter)
-    
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
-
-def load_config(config_path: Path) -> dict:
-    """Load config.yaml"""
-    if not config_path.exists():
-        logging.warning(f"Config file not found: {config_path}, using defaults")
-        return {}
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def load_vendor_map() -> dict:
     """Load vendor module mapping"""
@@ -241,7 +164,7 @@ def download_images_from_urls(image_urls, product_number, img_name, download_fol
         logging.error(f"Error downloading images: {e}")
         return 0
 
-def process_vendor_row(vendor_name, row, driver, download_folder, original_folder, image_folder, vendor_map):
+def process_vendor_row(vendor_name, row, driver, download_folder, original_folder, image_folder, app_images_folder, vendor_map):
     """Process one product row"""
     vendor_module = get_vendor_module(vendor_name, vendor_map)
     product_number = str(row.get("PrimaryVendorItemID", "")).strip()
@@ -367,14 +290,31 @@ def process_vendor_row(vendor_name, row, driver, download_folder, original_folde
                     except Exception:
                         image_sizes.append("unknown")
     
-    # Images are in external OneDrive folder, so store absolute paths
+    # Copy images to app storage AND keep external paths
+    app_image_files = []
+    for img_path in image_files:
+        try:
+            src_path = Path(img_path)
+            if src_path.exists():
+                # Copy to app storage with unique name
+                dest_name = f"{img_name}_{src_path.name}" if not src_path.name.startswith(img_name) else src_path.name
+                dest_path = app_images_folder / dest_name
+                
+                from shutil import copy2
+                copy2(src_path, dest_path)
+                app_image_files.append(str(dest_path))
+                logging.info(f"  Copied to app storage: {dest_name}")
+        except Exception as e:
+            logging.warning(f"  Failed to copy image to app storage: {e}")
+    
+    # Store both app paths (for ZIP download) and external paths (for OneDrive sync)
     supplier_data = {
         "product_number": prod_num,
         "product_url": product_url,
         "supplier_info": supplier_info,
-        "images": [str(Path(p)).replace('\\', '/') for p in image_files]
-    }
-    
+        "images": [str(Path(p)).replace('\\', '/') for p in image_files],  # External paths
+        "app_images": [str(Path(p)).replace('\\', '/') for p in app_image_files]  # App storage paths
+    }    
     run_summary = {
         "product_number": prod_num,
         "status": ("success" if supplier_info and product_url else "partial" if supplier_info or product_url else "failed"),
@@ -386,13 +326,6 @@ def process_vendor_row(vendor_name, row, driver, download_folder, original_folde
     }
     
     return supplier_data, run_summary
-
-def atomic_write_json(data, path: Path):
-    """Write JSON atomically"""
-    tmp = path.with_suffix('.tmp')
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
 
 def setup_selenium(config: dict):
     """Initialize Selenium WebDriver"""
@@ -464,20 +397,44 @@ def main():
     download_folder = cache_dir / 'downloads'
     download_folder.mkdir(parents=True, exist_ok=True)
     
-    # External folders (OneDrive paths from original scraper)
+    # External folders (OneDrive paths from config or fallback)
     user_profile = Path(os.path.expanduser("~"))
-    original_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "original billeder" / "Produktbilleder"
-    image_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "Produktbilleder_1500x1500"
-    
-    original_folder.mkdir(parents=True, exist_ok=True)
-    image_folder.mkdir(parents=True, exist_ok=True)
     
     # Set up logging
-    logger = setup_logging(logs_dir)
+    logger = setup_logging(logs_dir, "2_scrape")
     
     logger.info("=" * 60)
     logger.info("Step 2: Supplier Scraping")
     logger.info("=" * 60)
+
+    # Check for Server Mode (Docker/Cloud)
+    use_local_storage = os.environ.get("USE_LOCAL_STORAGE", "false").lower() == "true"
+    
+    if use_local_storage:
+        logger.info("Running in Server Mode (USE_LOCAL_STORAGE=true)")
+        # Use local cache folders instead of OneDrive
+        original_folder = cache_dir / "original_images"
+        image_folder = cache_dir / "scraped_images"
+    else:
+        # Try to get from config, otherwise fallback to hardcoded defaults (for backward compatibility)
+        original_folder_str = paths.get('original_images_dir')
+        if original_folder_str:
+            original_folder = Path(original_folder_str)
+        else:
+            original_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "original billeder" / "Produktbilleder"
+            
+        image_folder_str = paths.get('external_images_dir')
+        if image_folder_str:
+            image_folder = Path(image_folder_str)
+        else:
+            image_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "Produktbilleder_1500x1500"
+    
+    # Create app-local image storage
+    app_images_folder = output_dir / "images"
+    app_images_folder.mkdir(parents=True, exist_ok=True)
+    
+    original_folder.mkdir(parents=True, exist_ok=True)
+    image_folder.mkdir(parents=True, exist_ok=True)
     
     # Load input
     input_path = cache_dir / "processed_products.json"
@@ -522,6 +479,7 @@ def main():
             supplier_data, run_summary = process_vendor_row(
                 vendor_name, product, driver, 
                 str(download_folder), str(original_folder), str(image_folder),
+                app_images_folder,
                 vendor_map
             )
             supplier_data_list.append(supplier_data)
