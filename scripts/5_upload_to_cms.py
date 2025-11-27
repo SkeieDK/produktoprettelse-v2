@@ -396,17 +396,7 @@ class DandomainUploader:
             "showOnKelkooFeed": show_on_kelkoo,
         }
         
-        # Add custom fields (FIELD_1 through FIELD_20)
-        custom_fields = {}
-        for i in range(1, 21):
-            field_name = f"FIELD_{i}"
-            field_value = product.get(field_name)
-            if field_value is not None and str(field_value).strip() != '':
-                # Dandomain uses field1, field2, ... naming
-                custom_fields[f"field{i}"] = str(field_value)
-        
-        if custom_fields:
-            dandomain_product["customFields"] = custom_fields
+        # We'll add custom fields to `settings_data` after we build the base settings dict
         
         # Add category if available (using category NUMBER, not ID!)
         if category_number:
@@ -443,6 +433,15 @@ class DandomainUploader:
         retail_price = product.get('Retail_Price')
         if retail_price is not None:
             settings_data["retailSalesPrice"] = float(retail_price)
+
+        # Ensure unitNumber is sent in settings (ACTIVE_UNIT_ID maps to Dandomain unitNumber)
+        active_unit = product.get('ACTIVE_UNIT_ID') or product.get('unitNumber') or product.get('ACTIVE_UNITID') or product.get('UnitNumber')
+        if active_unit is not None and str(active_unit).strip() != '':
+            # The API accepts a string or number for unitNumber inside settings
+            try:
+                settings_data["unitNumber"] = int(active_unit)
+            except Exception:
+                settings_data["unitNumber"] = str(active_unit)
         
         # Add metaDescription if available
         meta_description = product.get('META_DESCRIPTION', '')
@@ -452,6 +451,13 @@ class DandomainUploader:
         # Add PDF as technical document link if uploaded
         if pdf_url:
             settings_data["techDocLink"] = pdf_url
+
+        # Add custom fields into settings_data (customField1..customField20)
+        for i in range(1, 21):
+            field_name = f"FIELD_{i}"
+            field_value = product.get(field_name)
+            if field_value is not None and str(field_value).strip() != '':
+                settings_data[f"customField{i}"] = str(field_value)
         
         return dandomain_product, settings_data
     
