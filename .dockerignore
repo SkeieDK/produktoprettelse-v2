@@ -3,3 +3,4 @@ __pycache__/
 venv/
 .git/
 *.log
+Dandomain_API_docs/

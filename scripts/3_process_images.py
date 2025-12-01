@@ -10,21 +10,20 @@ Output: data/output/enriched_products.json (updated with relative image paths)
 Logs to: logs/3_process_images.log
 """
 
-import json
-import os
 import sys
 import logging
 from pathlib import Path
 from shutil import copy2
 from PIL import Image
-import yaml
-from datetime import datetime
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.utils import setup_logging, load_config, atomic_write_json
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config
+from core.logging import setup_logging
+from core.file_utils import load_json, save_json
 
 def process_images(logger, config):
     """
@@ -36,9 +35,8 @@ def process_images(logger, config):
     5. Update JSON with relative paths
     6. Write to enriched_products.json
     """
-    paths = config.get("paths", {})
-    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
-    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
+    output_dir = config.paths.output_dir
+    cache_dir = config.paths.cache_dir
     images_dir = output_dir / "images"
     images_dir.mkdir(exist_ok=True)
     
@@ -47,47 +45,41 @@ def process_images(logger, config):
     pdfs_dir.mkdir(exist_ok=True)
     
     # Determine external PDF directory (sibling to external images dir)
-    external_images_dir_str = paths.get("external_images_dir")
+    external_images_dir = config.paths.external_images_dir
     external_pdfs_dir = None
-    if external_images_dir_str:
+    if external_images_dir:
         try:
-            ext_img_path = Path(external_images_dir_str)
             # Create 'Datablade' folder next to the images folder
-            external_pdfs_dir = ext_img_path.parent / "Datablade"
+            external_pdfs_dir = external_images_dir.parent / "Datablade"
             external_pdfs_dir.mkdir(exist_ok=True)
             logger.info(f"Using external PDF directory: {external_pdfs_dir}")
         except Exception as e:
             logger.warning(f"Could not setup external PDF directory: {e}")
     
     supplier_info_path = output_dir / "supplier_info.json"
-    if not supplier_info_path.exists():
+    supplier_data = load_json(supplier_info_path, default=None)
+    if supplier_data is None:
         logger.error(f"Input file not found: {supplier_info_path}")
         return False
     
     # Load original processed products for metadata
     processed_products_path = cache_dir / "processed_products.json"
     processed_by_prod_num = {}
-    if processed_products_path.exists():
+    processed_products = load_json(processed_products_path, default=[])
+    if processed_products:
         logger.info(f"Loading processed products metadata: {processed_products_path}")
-        try:
-            with open(processed_products_path, 'r', encoding='utf-8') as f:
-                processed_products = json.load(f)
-                if isinstance(processed_products, dict):
-                    processed_products = [processed_products]
-                # Index by PROD_NUM for fast lookup
-                for prod in processed_products:
-                    prod_num = prod.get("PROD_NUM")
-                    if prod_num:
-                        processed_by_prod_num[prod_num] = prod
-                logger.info(f"  Indexed {len(processed_by_prod_num)} products by PROD_NUM")
-        except Exception as e:
-            logger.warning(f"  Could not load processed products: {e}")
+        if isinstance(processed_products, dict):
+            processed_products = [processed_products]
+        # Index by PROD_NUM for fast lookup
+        for prod in processed_products:
+            prod_num = prod.get("PROD_NUM")
+            if prod_num:
+                processed_by_prod_num[prod_num] = prod
+        logger.info(f"  Indexed {len(processed_by_prod_num)} products by PROD_NUM")
     else:
         logger.warning(f"Processed products file not found: {processed_products_path}")
     
     logger.info(f"Reading supplier info: {supplier_info_path}")
-    with open(supplier_info_path, 'r', encoding='utf-8') as f:
-        supplier_data = json.load(f)
     
     # Handle both list and single dict
     if isinstance(supplier_data, dict):
@@ -247,7 +239,7 @@ def process_images(logger, config):
     
     # Write enriched output
     enriched_path = output_dir / "enriched_products.json"
-    atomic_write_json(supplier_data, enriched_path)
+    save_json(enriched_path, supplier_data, atomic=True)
     logger.info(f"✓ Enriched JSON: {enriched_path}")
     
     logger.info("=" * 60)
@@ -265,10 +257,8 @@ def process_images(logger, config):
 
 def main():
     """Main entry point."""
-    config_path = PROJECT_ROOT / "config.yaml"
-    config = load_config(config_path)
-    paths = config.get("paths", {})
-    logs_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
+    config = load_config()
+    logs_dir = config.paths.logs_dir
     
     logger = setup_logging(logs_dir, "3_process_images")
     

@@ -472,7 +472,7 @@ class CSVSanitering:
             prefix, num = match.groups()
             current_num = int(num)
             # Round up to next multiple of 10
-            start_num = math.ceil(current_num / 10) * 10
+            start_num = math.ceil((current_num + 1) / 10) * 10
         else:
             prefix, start_num = "E", 100000
         # Generate product numbers starting from rounded value

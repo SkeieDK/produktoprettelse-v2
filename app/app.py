@@ -42,11 +42,20 @@ DATA_CACHE = PROJECT_ROOT / "data" / "cache"
 CACHE_DIR = PROJECT_ROOT / "cache"
 CATEGORIES_WITH_PRODUCTS_FILE = CACHE_DIR / "categories_with_products.json"
 IMAGE_BASE_URL = "https://engrosrengoringsmidler.dk"
-OFFER_CATEGORY_NUMBER = "20400000000000"
 
 # Add scripts to path for imports
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Use core utilities (consolidated from multiple implementations)
+from core.file_utils import load_json, save_json
+from core.config import load_config
+
+# Load configuration from config.yaml
+_app_config = load_config()
+OFFER_CATEGORY_NUMBER = _app_config.offer.category_number
+IMAGES_CACHE_DIR = PROJECT_ROOT / _app_config.paths.images_cache
+DOWNLOADS_CACHE_DIR = PROJECT_ROOT / _app_config.paths.downloads_cache
 
 from api_manager import get_api_manager
 
@@ -366,24 +375,15 @@ st.markdown(
 # ============================================================================
 
 def load_json_file(filepath):
-    """Load JSON file safely."""
-    try:
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        st.warning(f"Could not load {filepath}: {e}")
-    return None
+    """Load JSON file safely. Wrapper for core.file_utils.load_json."""
+    return load_json(filepath, default=None)
 
 def save_json_file(filepath, data):
-    """Save JSON file safely."""
-    try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        st.error(f"Could not save {filepath}: {e}")
-        return False
+    """Save JSON file safely. Wrapper for core.file_utils.save_json."""
+    success = save_json(filepath, data, atomic=False)  # Non-atomic for simpler UI flow
+    if not success:
+        st.error(f"Could not save {filepath}")
+    return success
 
 
 def extract_product_name(product: Dict[str, Any]) -> str:
@@ -738,6 +738,62 @@ def build_price_delete(entry: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def prepare_offer_operations(product: Dict[str, Any], action: str, new_offer_price: Optional[float] = None) -> Tuple[List[Dict[str, Optional[Dict[str, Any]]]], Dict[str, Any], str]:
+    """Prepare a list of price operations for create/remove flows without calling APIs.
+
+    Returns (operations, context, error_message) where error_message is empty string on success.
+    """
+    ops: List[Dict[str, Optional[Dict[str, Any]]]] = []
+    ctx: Dict[str, Any] = {}
+
+    def q_delete_create(original: Dict[str, Any], replacement: Dict[str, Any]) -> None:
+        ops.append({"delete": build_price_delete(original), "create": replacement})
+
+    def q_update(payload: Dict[str, Any]) -> None:
+        ops.append({"update": payload})
+
+    prices_local = extract_price_items(product)
+    primary_entry = None
+    for entry in prices_local:
+        group_id = str(entry.get("b2bGroupId", ""))
+        try:
+            quantity_val = int(entry.get("quantity", 1) or 1)
+        except (TypeError, ValueError):
+            quantity_val = 1
+        if group_id == "-2" and quantity_val == 1:
+            primary_entry = entry
+            break
+    if primary_entry is None:
+        return [], {}, "Ingen standardpris fundet"
+
+    if action == "create":
+        if new_offer_price is None or new_offer_price <= 0:
+            return [], {}, "Mangler gyldig tilbudspris"
+        for entry in prices_local:
+            group_id = str(entry.get("b2bGroupId", ""))
+            quantity_val = int(entry.get("quantity", 1) or 1)
+            if group_id == "-2" and quantity_val > 1:
+                q_delete_create(entry, build_price_update(entry, b2b_override="1", special_offer=None, include_identity=False))
+        q_update(build_price_update(primary_entry, b2b_override="-2", special_offer=new_offer_price, include_identity=True, special_offer_period=1))
+        ctx["custom_field3"] = "Tilbud"
+        ctx["price_entry"] = {**primary_entry, "specialOfferPrice": new_offer_price}
+    elif action == "remove":
+        for entry in prices_local:
+            group_id = str(entry.get("b2bGroupId", ""))
+            quantity_val = int(entry.get("quantity", 1) or 1)
+            if group_id == "1" and quantity_val > 1:
+                q_delete_create(entry, build_price_update(entry, b2b_override="-2", special_offer=None, include_identity=False))
+        cleared_payload = build_price_update(primary_entry, b2b_override="-2", special_offer=None, include_identity=True)
+        q_update(cleared_payload)
+        ctx["custom_field3"] = ""
+        ctx["price_entry"] = {**primary_entry, "specialOfferPrice": None}
+    else:
+        return [], {}, "Ukendt handling"
+
+    return ops, ctx, ""
+
+
+
 def execute_offer_action(
     api,
     product: Dict[str, Any],
@@ -747,6 +803,10 @@ def execute_offer_action(
     product_number = product.get("number")
     if not product_number:
         return False, "Produktnummer mangler", None
+
+    # Skip test products with " - Deaktiveret" suffix
+    if " - Deaktiveret" in str(product_number):
+        return False, "Testprodukt (Deaktiveret) - springer over", None
 
     prices = extract_price_items(product)
     standard_entry = None
@@ -763,66 +823,22 @@ def execute_offer_action(
     price_operations: List[Dict[str, Optional[Dict[str, Any]]]] = []
     context: Dict[str, Any] = {}
 
-    def queue_delete_create(original: Dict[str, Any], replacement: Dict[str, Any]) -> None:
-        price_operations.append({
-            "delete": build_price_delete(original),
-            "create": replacement,
-        })
+    # Use the shared prepare_offer_operations helper to build operations
+    # We rely on the module-level `prepare_offer_operations` function, which returns
+    # (operations, context, error_message). Keep logic centralized and remove the
+    # duplicated helper + queue functions to avoid out-of-scope references.
 
-    def queue_update(update_payload: Dict[str, Any]) -> None:
-        price_operations.append({"update": update_payload})
+    # Use the prepare helper to build operations
+    prepared_ops, prepared_ctx, prepare_err = prepare_offer_operations(product, action, new_offer_price)
+    if prepare_err:
+        return False, prepare_err, None
+    price_operations.extend(prepared_ops)
+    context.update(prepared_ctx)
 
-    if action == "create":
-        if new_offer_price is None or new_offer_price <= 0:
-            return False, "Mangler gyldig tilbudspris", None
-        for entry in prices:
-            group_id = str(entry.get("b2bGroupId", ""))
-            quantity_val = int(entry.get("quantity", 1) or 1)
-            if group_id == "-2" and quantity_val > 1:
-                queue_delete_create(
-                    entry,
-                    build_price_update(
-                        entry,
-                        b2b_override="1",
-                        special_offer=None,
-                        include_identity=False,
-                    ),
-                )
-        queue_update(
-            build_price_update(
-                standard_entry,
-                b2b_override="-2",
-                special_offer=new_offer_price,
-                include_identity=True,
-            )
-        )
-        context["custom_field3"] = "Tilbud"
-        context["price_entry"] = {**standard_entry, "specialOfferPrice": new_offer_price}
-    elif action == "remove":
-        for entry in prices:
-            group_id = str(entry.get("b2bGroupId", ""))
-            quantity_val = int(entry.get("quantity", 1) or 1)
-            if group_id == "1" and quantity_val > 1:
-                queue_delete_create(
-                    entry,
-                    build_price_update(
-                        entry,
-                        b2b_override="-2",
-                        special_offer=None,
-                        include_identity=False,
-                    ),
-                )
-        cleared_payload = build_price_update(
-            standard_entry,
-            b2b_override="-2",
-            special_offer=None,
-            include_identity=True,
-        )
-        queue_update(cleared_payload)
-        context["custom_field3"] = ""
-        context["price_entry"] = {**standard_entry, "specialOfferPrice": None}
-    else:
-        return False, "Ukendt handling", None
+    # The operation list is prepared by the top-level function; this block was previously
+    # duplicating the creation of `price_operations` and referenced local queue helpers
+    # that were out of scope. We already called `prepare_offer_operations` earlier and
+    # extended `price_operations` and `context` with its result, so nothing else to do here.
 
     if price_operations and not api.update_product_prices(product_number, price_operations):
         return False, "Prisopdatering fejlede", None
@@ -1346,7 +1362,7 @@ with tab1:
             st.info("⏳ Starter pipeline... (dette tager nogle minutter)")
             try:
                 result = subprocess.run(
-                    [sys.executable, str(SCRIPTS_DIR / "run_all.py"), "--stop-after", "3.5"],
+                    [sys.executable, str(SCRIPTS_DIR / "run_all.py"), "--stop-after", "4"],
                     cwd=str(PROJECT_ROOT),
                     capture_output=True,
                     text=True,
@@ -1816,31 +1832,49 @@ with tab2:
                                 prod_num = product.get('product_number', '').split(' - ')[0].strip()
                                 
                                 # 1. Add Images
-                                # Get app_images (stored in data/output/images)
+                                # Check multiple locations for images:
+                                # - app_images field (may contain relative or absolute paths)
+                                # - images field
+                                # - IMAGES_CACHE_DIR (data/cache/original_images from config)
+                                # - DATA_OUTPUT/images (legacy location)
                                 app_images = product.get('app_images', [])
                                 if not app_images:
-                                    # Fallback: check if images exist in data/output/images
-                                    for img_path in product.get('images', []):
-                                        if img_path:
-                                            img_name = Path(img_path).name
-                                            local_img = DATA_OUTPUT / "images" / img_name
-                                            if local_img.exists():
-                                                app_images.append(str(local_img))
+                                    app_images = product.get('images', [])
                                 
                                 for img_path in app_images:
-                                    img_file = Path(img_path)
-                                    if img_file.exists():
-                                        zip_filename = f"images/{prod_num}_{img_file.name}"
-                                        zip_file.write(img_file, zip_filename)
-                                        total_files += 1
+                                    if not img_path:
+                                        continue
+                                    img_name = Path(img_path).name
+                                    
+                                    # Try multiple locations
+                                    possible_locations = [
+                                        Path(img_path) if Path(img_path).is_absolute() else None,
+                                        IMAGES_CACHE_DIR / img_name,
+                                        DATA_OUTPUT / "images" / img_name,
+                                        PROJECT_ROOT / img_path if not Path(img_path).is_absolute() else None,
+                                    ]
+                                    
+                                    for loc in possible_locations:
+                                        if loc and loc.exists():
+                                            zip_filename = f"images/{prod_num}_{img_name}"
+                                            zip_file.write(loc, zip_filename)
+                                            total_files += 1
+                                            break
                                 
                                 # 2. Add PDF (Datablade)
-                                # Look in data/output/pdfs
-                                pdf_path = DATA_OUTPUT / "pdfs" / f"{prod_num}.pdf"
-                                if pdf_path.exists():
-                                    zip_filename = f"datablade/{prod_num}.pdf"
-                                    zip_file.write(pdf_path, zip_filename)
-                                    total_files += 1
+                                # Check multiple locations:
+                                # - DOWNLOADS_CACHE_DIR (data/cache/downloads from config)
+                                # - DATA_OUTPUT/pdfs (legacy location)
+                                pdf_locations = [
+                                    DOWNLOADS_CACHE_DIR / f"{prod_num}.pdf",
+                                    DATA_OUTPUT / "pdfs" / f"{prod_num}.pdf",
+                                ]
+                                for pdf_path in pdf_locations:
+                                    if pdf_path.exists():
+                                        zip_filename = f"datablade/{prod_num}.pdf"
+                                        zip_file.write(pdf_path, zip_filename)
+                                        total_files += 1
+                                        break
                         
                         if total_files == 0:
                             st.warning("❌ Ingen filer fundet til download")
@@ -2161,6 +2195,7 @@ with tab_prices:
         st.session_state.pop("price_mode", None)
         st.session_state.pop("price_selection_label", None)
         st.session_state.pop("price_selection_number", None)
+        st.session_state.pop("price_selected_products", None)
     st.session_state["price_active_action"] = action
 
     if action == "Opret tilbud":
@@ -2193,8 +2228,11 @@ with tab_prices:
                 previous_mode = st.session_state.get("price_mode")
                 if previous_mode == "create" and previous_selection and previous_selection != selected_cat_number:
                     st.session_state.pop("price_data", None)
+                    st.session_state.pop("price_selected_products", None)
 
                 if st.button("📥 Hent Produkter & Priser", type="primary", key="fetch_offer_create"):
+                    # Clear previous selection when fetching new data
+                    st.session_state.pop("price_selected_products", None)
                     with st.spinner(f"Henter produkter for {selected_cat_name}..."):
                         all_products = api.get_all_products(include_prices=True, include_categories=True)
                         matching_rows: List[Dict[str, Any]] = []
@@ -2232,6 +2270,8 @@ with tab_prices:
         st.markdown("#### 1. Produkter i tilbudskategori")
 
         if st.button("📥 Hent Produkter & Priser", type="primary", key="fetch_offer_remove"):
+            # Clear previous selection when fetching new data
+            st.session_state.pop("price_selected_products", None)
             with st.spinner("Henter produkter fra tilbudskategorien..."):
                 all_products = api.get_all_products(include_prices=True, include_categories=True)
                 matching_rows: List[Dict[str, Any]] = []
@@ -2257,6 +2297,8 @@ with tab_prices:
                     st.session_state.price_mode = "remove"
                     st.session_state.price_selection_label = f"TILBUD ({OFFER_CATEGORY_NUMBER})"
                     st.session_state.price_selection_number = OFFER_CATEGORY_NUMBER
+                    # Pre-select all products for removal mode
+                    st.session_state.price_selected_products = set(df["Varenummer"].astype(str).tolist())
                     st.success(f"{len(df)} produkter fundet i tilbudskategorien.")
 
                 if skipped_numbers:
@@ -2272,219 +2314,312 @@ with tab_prices:
     # 2. Edit Prices
     if "price_data" in st.session_state and not st.session_state.price_data.empty:
         st.divider()
-        st.markdown("#### 2. Rediger Priser")
-
-        st.session_state.price_data = normalize_price_dataframe(st.session_state.price_data.copy())
-        active_mode = st.session_state.get("price_mode", "create")
-        selection_label = st.session_state.get("price_selection_label")
-        if selection_label:
-            st.caption(f"Data fra: {selection_label}")
-
-        col_check_all, col_uncheck_all = st.columns(2)
-        with col_check_all:
-            if st.button("✅ Markér alle", key="mark_all"):
-                df = st.session_state.price_data.copy()
-                df["Opdater"] = True
-                st.session_state.price_data = df
-                st.rerun()
-        with col_uncheck_all:
-            if st.button("🚫 Fjern markering", key="unmark_all"):
-                df = st.session_state.price_data.copy()
-                df["Opdater"] = False
-                st.session_state.price_data = df
-                st.rerun()
         
-        # Bulk Actions
-        with st.expander("🛠️ Masseopdatering"):
-            col_bulk1, col_bulk2 = st.columns(2)
-            with col_bulk1:
-                target_margin = st.number_input(
-                    "Sæt ønsket margin % for alle:",
-                    min_value=0.0,
-                    max_value=99.9,
-                    value=30.0,
-                    step=0.1
-                )
-                if st.button("Beregn priser ud fra margin"):
-                    df = st.session_state.price_data.copy()
-                    df["Ny Tilbudspris"] = df.apply(
-                        lambda row: calculate_price_from_margin(row.get("_cost_price", 0.0), target_margin),
-                        axis=1
-                    )
-                    df["Ny Margin %"] = df.apply(
-                        lambda row: compute_margin_pct(row.get("_cost_price", 0.0), row.get("Ny Tilbudspris")),
-                        axis=1
-                    )
-                    df["Besparelse %"] = df.apply(
-                        lambda row: compute_savings_pct(row.get("Nuværende Pris", 0.0), row.get("Ny Tilbudspris", 0.0)),
-                        axis=1
-                    )
-                    df["Opdater"] = True
-                    st.session_state.price_data = df
-                    st.rerun()
+        # Initialize selection state if not present
+        if "price_selected_products" not in st.session_state:
+            st.session_state.price_selected_products = set()
+        
+        # Two-step flow: Step 2a - Product Selection, Step 2b - Price Editing
+        step_2a, step_2b = st.tabs(["📋 2a. Vælg produkter", "✏️ 2b. Rediger priser"])
+        
+        with step_2a:
+            st.markdown("#### Vælg produkter til opdatering")
             
-            with col_bulk2:
-                st.info("Du kan også rette manuelt i tabellen nedenfor.")
+            active_mode = st.session_state.get("price_mode", "create")
+            selection_label = st.session_state.get("price_selection_label")
+            if selection_label:
+                st.caption(f"Data fra: {selection_label}")
+            
+            # Quick selection buttons (no st.rerun() needed - uses callbacks)
+            col_select_all, col_deselect_all, col_count = st.columns([1, 1, 2])
+            with col_select_all:
+                if st.button("✅ Vælg alle", key="select_all_products"):
+                    st.session_state.price_selected_products = set(
+                        st.session_state.price_data["Varenummer"].astype(str).tolist()
+                    )
+            with col_deselect_all:
+                if st.button("🚫 Fravælg alle", key="deselect_all_products"):
+                    st.session_state.price_selected_products = set()
+            with col_count:
+                selected_count = len(st.session_state.price_selected_products)
+                total_count = len(st.session_state.price_data)
+                st.metric("Valgt", f"{selected_count} / {total_count}")
+            
+            st.divider()
+            
+            # Display products as a grid with checkboxes
+            df = st.session_state.price_data
+            
+            # Grid layout - 3 products per row
+            num_cols = 3
+            products_list = df.to_dict('records')
+            
+            for row_start in range(0, len(products_list), num_cols):
+                cols = st.columns(num_cols)
+                for col_idx, col in enumerate(cols):
+                    product_idx = row_start + col_idx
+                    if product_idx >= len(products_list):
+                        break
+                    
+                    product = products_list[product_idx]
+                    prod_num = str(product.get("Varenummer", ""))
+                    prod_name = product.get("Produktnavn", "")[:40] + ("..." if len(product.get("Produktnavn", "")) > 40 else "")
+                    current_price = product.get("Nuværende Pris", 0)
+                    cost_price = product.get("Kostpris", 0)
+                    img_url = product.get("Billede", "")
+                    tilbud_label = product.get("Tilbud Label", "")
+                    
+                    with col:
+                        with st.container(border=True):
+                            # Image
+                            if img_url:
+                                st.image(img_url, width=150)
+                            else:
+                                st.write("📷 Intet billede")
+                            
+                            # Product info
+                            st.markdown(f"**{prod_num}**")
+                            st.caption(prod_name)
+                            st.write(f"💰 {current_price:.2f} kr" if current_price else "💰 -")
+                            if tilbud_label:
+                                st.markdown(f"🏷️ **{tilbud_label}**")
+                            
+                            # Selection checkbox
+                            is_selected = prod_num in st.session_state.price_selected_products
+                            checkbox_key = f"select_{prod_num}_{product_idx}"
+                            
+                            if st.checkbox("Vælg", value=is_selected, key=checkbox_key):
+                                st.session_state.price_selected_products.add(prod_num)
+                            else:
+                                st.session_state.price_selected_products.discard(prod_num)
+            
+            if selected_count > 0:
+                st.success(f"✅ {selected_count} produkter valgt. Gå til '2b. Rediger priser' for at angive tilbudspriser.")
         
-        # Data Editor (display-only columns)
-        display_columns = [
-            "Billede",
-            "Varenummer",
-            "Produktnavn",
-            "Tilbud Label",
-            "Kostpris",
-            "Nuværende Pris",
-            "Ny Tilbudspris",
-            "Ny Margin %",
-            "Besparelse %",
-            "Opdater",
-        ]
-
-        edited_df = st.data_editor(
-            st.session_state.price_data[display_columns],
-            column_config={
-                "Billede": st.column_config.ImageColumn("Billede", help="Produktbillede", width="large"),
-                "Varenummer": st.column_config.TextColumn(disabled=True),
-                "Produktnavn": st.column_config.TextColumn(disabled=True),
-                "Kostpris": st.column_config.NumberColumn(format="%.2f kr", disabled=True),
-                "Nuværende Pris": st.column_config.NumberColumn(format="%.2f kr", disabled=True),
-                "Ny Tilbudspris": st.column_config.NumberColumn(format="%.2f kr"),
-                "Ny Margin %": st.column_config.NumberColumn(format="%.1f %%", disabled=True),
-                "Besparelse %": st.column_config.NumberColumn(format="%.1f %%", disabled=True),
-                "Tilbud Label": st.column_config.TextColumn(disabled=True),
-                "Opdater": st.column_config.CheckboxColumn("Opdater?", help="Marker produkter der skal have opdateret tilbud"),
-            },
-            column_order=display_columns,
-            hide_index=True,
-            width='stretch',
-            key="price_editor",
-        )
-
-        if not edited_df.empty:
-            # Persist user edits back to master dataframe
-            for column in display_columns:
-                st.session_state.price_data[column] = edited_df[column]
-
-        # Normalize values and recompute savings
-        st.session_state.price_data["Ny Tilbudspris"] = st.session_state.price_data["Ny Tilbudspris"].apply(coerce_price_value)
-        st.session_state.price_data["Besparelse %"] = st.session_state.price_data.apply(
-            lambda row: compute_savings_pct(row.get("Nuværende Pris", 0.0), row.get("Ny Tilbudspris", 0.0)),
-            axis=1,
-        )
-        st.session_state.price_data["Ny Margin %"] = st.session_state.price_data.apply(
-            lambda row: compute_margin_pct(row.get("_cost_price", 0.0), row.get("Ny Tilbudspris")),
-            axis=1,
-        )
-
-        # 3. Offer Actions
-        st.divider()
-        st.markdown("#### 3. Opret eller fjern tilbud")
-
-        to_update = st.session_state.price_data[st.session_state.price_data["Opdater"] == True]
-        count = len(to_update)
-
-        if count == 0:
-            st.info("Ingen produkter markeret. Sæt kryds i 'Opdater?' for de produkter du vil ændre.")
-        else:
-            st.warning(f"⚠️ Du er ved at opdatere tilbud på {count} produkter.")
-
-            def process_offers(action: str) -> None:
-                progress_bar = st.progress(0.0)
-                status_text = st.empty()
-                df = st.session_state.price_data.copy()
-                successes: List[str] = []
-                failures: List[Tuple[str, str]] = []
-
-                for i, (index, row) in enumerate(to_update.iterrows()):
-                    prod_num = str(row.get("Varenummer"))
-                    status_text.text(f"Behandler {prod_num}...")
-                    new_price = coerce_price_value(row.get("Ny Tilbudspris"))
-
-                    if action == "create" and (new_price is None or new_price <= 0):
-                        failures.append((prod_num, "Mangler gyldig tilbudspris"))
-                        progress_bar.progress((i + 1) / count)
-                        continue
-
-                    try:
-                        product_details = api.get_product(
-                            prod_num,
-                            include_settings=True,
-                            include_prices=True,
-                            include_categories=True,
-                        )
-                    except Exception as exc:
-                        failures.append((prod_num, f"API-fejl: {exc}"))
-                        progress_bar.progress((i + 1) / count)
-                        continue
-
-                    success_flag, message, context = execute_offer_action(
-                        api,
-                        product_details,
-                        action,
-                        new_price,
-                    )
-
-                    if success_flag:
-                        successes.append(prod_num)
-                        df.loc[index, "Opdater"] = False
-
-                        if action == "create" and new_price is not None:
-                            df.loc[index, "Ny Tilbudspris"] = new_price
-                            df.loc[index, "Besparelse %"] = compute_savings_pct(
-                                df.loc[index, "Nuværende Pris"],
-                                new_price,
-                            )
-                            df.loc[index, "Ny Margin %"] = compute_margin_pct(
-                                df.loc[index, "_cost_price"],
-                                new_price,
-                            )
-                            df.loc[index, "Tilbud Label"] = "Tilbud"
-                            df.loc[index, "_custom_field3"] = "Tilbud"
-                        elif action == "remove":
-                            df.loc[index, "Ny Tilbudspris"] = df.loc[index, "Nuværende Pris"]
-                            df.loc[index, "Besparelse %"] = 0.0
-                            df.loc[index, "Ny Margin %"] = compute_margin_pct(
-                                df.loc[index, "_cost_price"],
-                                df.loc[index, "Nuværende Pris"],
-                            )
-                            df.loc[index, "Tilbud Label"] = ""
-                            df.loc[index, "_custom_field3"] = ""
-
-                        if context:
-                            if "categories" in context:
-                                df.loc[index, "_category_numbers"] = context["categories"]
-                            if "price_entry" in context:
-                                df.loc[index, "_price_payload"] = context["price_entry"]
-                    else:
-                        failures.append((prod_num, message or "Ukendt fejl"))
-
-                    progress_bar.progress((i + 1) / count)
-
-                progress_bar.empty()
-                status_text.empty()
-                st.session_state.price_data = df
-
-                if successes:
-                    preview = ", ".join(successes[:5])
-                    if len(successes) > 5:
-                        preview += ", ..."
-                    if action == "create":
-                        st.success(f"Tilbud oprettet for {len(successes)} produkter ({preview})")
-                    else:
-                        st.success(f"Tilbud fjernet for {len(successes)} produkter ({preview})")
-
-                if failures:
-                    failure_preview = "; ".join([f"{num}: {msg}" for num, msg in failures[:5]])
-                    if len(failures) > 5:
-                        failure_preview += "; ..."
-                    st.error(
-                        f"Fejl under tilbudsopdatering for {len(failures)} produkter: {failure_preview}"
-                    )
-
-            if active_mode == "create":
-                st.caption("Valgte produkter får oprettet tilbudspris, Tilbud-label og tilbudskategori.")
+        with step_2b:
+            st.markdown("#### Rediger priser for valgte produkter")
+            
+            # Filter to only selected products
+            selected_nums = st.session_state.price_selected_products
+            selected_df = st.session_state.price_data[
+                st.session_state.price_data["Varenummer"].astype(str).isin(selected_nums)
+            ].copy()
+            
+            if selected_df.empty:
+                st.info("👆 Vælg produkter i fanen '2a. Vælg produkter' først.")
             else:
-                st.caption("Valgte produkter får fjernet tilbudspris, label og kategori.")
+                st.caption(f"Viser {len(selected_df)} valgte produkter")
+                
+                # Bulk Actions
+                with st.expander("🛠️ Masseopdatering"):
+                    col_bulk1, col_bulk2 = st.columns(2)
+                    with col_bulk1:
+                        target_margin = st.number_input(
+                            "Sæt ønsket margin % for alle valgte:",
+                            min_value=0.0,
+                            max_value=99.9,
+                            value=30.0,
+                            step=0.1,
+                            key="bulk_margin_input"
+                        )
+                        if st.button("Beregn priser ud fra margin", key="calc_margin_btn"):
+                            # Update prices for selected products in the main dataframe
+                            df_main = st.session_state.price_data.copy()
+                            mask = df_main["Varenummer"].astype(str).isin(selected_nums)
+                            df_main.loc[mask, "Ny Tilbudspris"] = df_main.loc[mask].apply(
+                                lambda row: calculate_price_from_margin(row.get("_cost_price", 0.0), target_margin),
+                                axis=1
+                            )
+                            df_main.loc[mask, "Ny Margin %"] = df_main.loc[mask].apply(
+                                lambda row: compute_margin_pct(row.get("_cost_price", 0.0), row.get("Ny Tilbudspris")),
+                                axis=1
+                            )
+                            df_main.loc[mask, "Besparelse %"] = df_main.loc[mask].apply(
+                                lambda row: compute_savings_pct(row.get("Nuværende Pris", 0.0), row.get("Ny Tilbudspris", 0.0)),
+                                axis=1
+                            )
+                            st.session_state.price_data = df_main
+                            st.success(f"Priser beregnet for {mask.sum()} produkter med {target_margin}% margin.")
+                    
+                    with col_bulk2:
+                        st.info("Du kan også rette manuelt i tabellen nedenfor.")
+                
+                # Data Editor (no Opdater column - all displayed are selected)
+                display_columns = [
+                    "Billede",
+                    "Varenummer",
+                    "Produktnavn",
+                    "Tilbud Label",
+                    "Kostpris",
+                    "Nuværende Pris",
+                    "Ny Tilbudspris",
+                    "Ny Margin %",
+                    "Besparelse %",
+                ]
 
-            if st.button("🚀 Send til CMS (Dandomain)", type="primary"):
-                process_offers(active_mode)
+                edited_df = st.data_editor(
+                    selected_df[display_columns],
+                    column_config={
+                        "Billede": st.column_config.ImageColumn("Billede", help="Produktbillede", width="large"),
+                        "Varenummer": st.column_config.TextColumn(disabled=True),
+                        "Produktnavn": st.column_config.TextColumn(disabled=True),
+                        "Kostpris": st.column_config.NumberColumn(format="%.2f kr", disabled=True),
+                        "Nuværende Pris": st.column_config.NumberColumn(format="%.2f kr", disabled=True),
+                        "Ny Tilbudspris": st.column_config.NumberColumn(format="%.2f kr"),
+                        "Ny Margin %": st.column_config.NumberColumn(format="%.1f %%", disabled=True),
+                        "Besparelse %": st.column_config.NumberColumn(format="%.1f %%", disabled=True),
+                        "Tilbud Label": st.column_config.TextColumn(disabled=True),
+                    },
+                    column_order=display_columns,
+                    hide_index=True,
+                    width='stretch',
+                    key="price_editor_selected",
+                )
+
+                # Sync edits back to main dataframe
+                if not edited_df.empty:
+                    df_main = st.session_state.price_data.copy()
+                    for idx, row in edited_df.iterrows():
+                        prod_num = str(row["Varenummer"])
+                        mask = df_main["Varenummer"].astype(str) == prod_num
+                        if mask.any():
+                            df_main.loc[mask, "Ny Tilbudspris"] = row["Ny Tilbudspris"]
+                    
+                    # Recompute derived columns
+                    df_main["Ny Tilbudspris"] = df_main["Ny Tilbudspris"].apply(coerce_price_value)
+                    df_main["Besparelse %"] = df_main.apply(
+                        lambda row: compute_savings_pct(row.get("Nuværende Pris", 0.0), row.get("Ny Tilbudspris", 0.0)),
+                        axis=1,
+                    )
+                    df_main["Ny Margin %"] = df_main.apply(
+                        lambda row: compute_margin_pct(row.get("_cost_price", 0.0), row.get("Ny Tilbudspris")),
+                        axis=1,
+                    )
+                    st.session_state.price_data = df_main
+
+                # 3. Offer Actions
+                st.divider()
+                st.markdown("#### 3. Opret eller fjern tilbud")
+
+                count = len(selected_df)
+                active_mode = st.session_state.get("price_mode", "create")
+
+                st.warning(f"⚠️ Du er ved at opdatere tilbud på {count} produkter.")
+
+                def process_offers_new(action: str, selected_product_nums: set) -> None:
+                    progress_bar = st.progress(0.0)
+                    status_text = st.empty()
+                    df = st.session_state.price_data.copy()
+                    successes: List[str] = []
+                    failures: List[Tuple[str, str]] = []
+                    
+                    # Get rows for selected products
+                    selected_rows = df[df["Varenummer"].astype(str).isin(selected_product_nums)]
+
+                    for i, (index, row) in enumerate(selected_rows.iterrows()):
+                        prod_num = str(row.get("Varenummer"))
+                        status_text.text(f"Behandler {prod_num}...")
+                        new_price = coerce_price_value(row.get("Ny Tilbudspris"))
+
+                        if action == "create" and (new_price is None or new_price <= 0):
+                            failures.append((prod_num, "Mangler gyldig tilbudspris"))
+                            progress_bar.progress((i + 1) / count)
+                            continue
+
+                        try:
+                            product_details = api.get_product(
+                                prod_num,
+                                include_settings=True,
+                                include_prices=True,
+                                include_categories=True,
+                            )
+                        except Exception as exc:
+                            failures.append((prod_num, f"API-fejl: {exc}"))
+                            progress_bar.progress((i + 1) / count)
+                            continue
+
+                        success_flag, message, context = execute_offer_action(
+                            api,
+                            product_details,
+                            action,
+                            new_price,
+                        )
+
+                        if success_flag:
+                            successes.append(prod_num)
+                            # Remove from selection after success
+                            st.session_state.price_selected_products.discard(prod_num)
+
+                            if action == "create" and new_price is not None:
+                                df.loc[index, "Ny Tilbudspris"] = new_price
+                                df.loc[index, "Besparelse %"] = compute_savings_pct(
+                                    df.loc[index, "Nuværende Pris"],
+                                    new_price,
+                                )
+                                df.loc[index, "Ny Margin %"] = compute_margin_pct(
+                                    df.loc[index, "_cost_price"],
+                                    new_price,
+                                )
+                                df.loc[index, "Tilbud Label"] = "Tilbud"
+                                df.loc[index, "_custom_field3"] = "Tilbud"
+                            elif action == "remove":
+                                df.loc[index, "Ny Tilbudspris"] = df.loc[index, "Nuværende Pris"]
+                                df.loc[index, "Besparelse %"] = 0.0
+                                df.loc[index, "Ny Margin %"] = compute_margin_pct(
+                                    df.loc[index, "_cost_price"],
+                                    df.loc[index, "Nuværende Pris"],
+                                )
+                                df.loc[index, "Tilbud Label"] = ""
+                                df.loc[index, "_custom_field3"] = ""
+
+                            if context:
+                                # Safely set categories
+                                if "categories" in context:
+                                    try:
+                                        categories_val = list(context.get("categories") or [])
+                                        if index in df.index:
+                                            df.at[index, "_category_numbers"] = categories_val
+                                    except Exception as e:
+                                        st.warning(f"Kunne ikke opdatere kategorier for {prod_num}: {e}")
+
+                                # Safely set price payload
+                                if "price_entry" in context:
+                                    try:
+                                        price_entry_val = context.get("price_entry")
+                                        if index in df.index:
+                                            df.at[index, "_price_payload"] = price_entry_val
+                                    except Exception as e:
+                                        st.warning(f"Kunne ikke opdatere price_payload for {prod_num}: {e}")
+                        else:
+                            failures.append((prod_num, message or "Ukendt fejl"))
+
+                        progress_bar.progress((i + 1) / count)
+
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.session_state.price_data = df
+
+                    if successes:
+                        preview = ", ".join(successes[:5])
+                        if len(successes) > 5:
+                            preview += ", ..."
+                        if action == "create":
+                            st.success(f"Tilbud oprettet for {len(successes)} produkter ({preview})")
+                        else:
+                            st.success(f"Tilbud fjernet for {len(successes)} produkter ({preview})")
+
+                    if failures:
+                        failure_preview = "; ".join([f"{num}: {msg}" for num, msg in failures[:5]])
+                        if len(failures) > 5:
+                            failure_preview += "; ..."
+                        st.error(
+                            f"Fejl under tilbudsopdatering for {len(failures)} produkter: {failure_preview}"
+                        )
+
+                if active_mode == "create":
+                    st.caption("Valgte produkter får oprettet tilbudspris, Tilbud-label og tilbudskategori.")
+                else:
+                    st.caption("Valgte produkter får fjernet tilbudspris, label og kategori.")
+
+                if st.button("🚀 Send til CMS (Dandomain)", type="primary", key="send_to_cms_btn"):
+                    process_offers_new(active_mode, selected_nums)

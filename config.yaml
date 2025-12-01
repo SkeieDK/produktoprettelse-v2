@@ -12,8 +12,10 @@ logging:
   max_bytes: 10485760
 paths:
   cache_dir: data/cache
+  downloads_cache: data/cache/downloads
   external_images_dir: C:/Users/anton/OneDrive - Bunzl Continental Europe/Documents
     - Bonvig/Produktbilleder_1500x1500
+  images_cache: data/cache/original_images
   images_output: data/output/images
   input_dir: data/input
   logs_dir: logs
@@ -22,3 +24,5 @@ paths:
   output_dir: data/output
   products_cache: cache/products_cache.json
   thumbnails_output: data/output/images/thumbnails
+offer:
+  category_number: "20400000000000"

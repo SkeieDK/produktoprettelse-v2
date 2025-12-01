@@ -12,21 +12,20 @@ Usage:
 """
 
 import sys
-import os
 import logging
 from pathlib import Path
-from datetime import datetime
 import pandas as pd
-import json
-import numpy as np
-import yaml
 
 # Add project root to path so we can import csv_data_transformation
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config
+from core.logging import setup_logging
+from core.file_utils import save_json
+
 from csv_data_transformation.sanitering import CSVSanitering
-from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def find_latest_csv(input_dir: Path) -> Path:
     """Find the most recent CSV file in input directory"""
@@ -39,16 +38,15 @@ def find_latest_csv(input_dir: Path) -> Path:
     return csv_files[0]
 
 def main():
-    # Load config
-    config_path = PROJECT_ROOT / "config.yaml"
-    config = load_config(config_path)
-    paths = config.get('paths', {})
+    # Load config (returns AppConfig dataclass)
+    config = load_config()
     
-    # Set up directories
-    input_dir = PROJECT_ROOT / paths.get('input_dir', 'data/input')
-    output_dir = PROJECT_ROOT / paths.get('output_dir', 'data/output')
-    cache_dir = PROJECT_ROOT / paths.get('cache_dir', 'data/cache')
-    logs_dir = PROJECT_ROOT / paths.get('logs_dir', 'logs')
+    # Set up directories using typed config
+    input_dir = config.paths.input_dir
+    output_dir = config.paths.output_dir
+    cache_dir = config.paths.cache_dir
+    logs_dir = config.paths.logs_dir
+    products_cache_path = config.paths.products_cache
     
     # Create directories
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -90,8 +88,6 @@ def main():
         sanitizer = CSVSanitering(df)
         
         # Get products cache path from config
-        products_cache_path = PROJECT_ROOT / paths.get('products_cache', 'cache/products_cache.json')
-        
         if not products_cache_path.exists():
             logger.warning(f"Products cache not found: {products_cache_path}")
             logger.warning("Will start from E100000 for PROD_NUM")
@@ -113,12 +109,12 @@ def main():
         # 2. JSON output (main location: output_dir)
         json_output = output_dir / f"{input_csv.stem}_processed.json"
         records = sanitizer.to_records()
-        atomic_write_json(records, json_output)
+        save_json(json_output, records, atomic=True)
         logger.info(f"✓ JSON output: {json_output}")
         
         # 3. Also copy to cache for backward compatibility with Step 2 & 3
         cache_json = cache_dir / "processed_products.json"
-        atomic_write_json(records, cache_json)
+        save_json(cache_json, records, atomic=True)
         logger.info(f"✓ Cache copy: {cache_json}")
         
     except Exception as e:

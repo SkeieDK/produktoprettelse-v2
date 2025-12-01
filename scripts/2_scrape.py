@@ -14,9 +14,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
 import time
-import yaml
 import importlib
 import requests
 import pandas as pd
@@ -28,16 +26,19 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config
+from core.logging import setup_logging
+from core.file_utils import load_json, save_json
+
 # Import utilities and vendor modules
 from supplier_pi.utils.pdf_extractor import extract_text_from_pdf
 from supplier_pi.utils.image_processor import resize_and_save_all_images
-from scripts.utils import setup_logging, load_config, atomic_write_json
 
 def load_vendor_map() -> dict:
     """Load vendor module mapping"""
     vendor_map_path = PROJECT_ROOT / 'supplier_pi' / 'utils' / 'vendor_map.json'
-    with open(vendor_map_path, encoding='utf-8') as f:
-        raw_map = json.load(f)
+    raw_map = load_json(vendor_map_path, default={})
     # Case-insensitive mapping
     return {k.strip().lower(): v for k, v in raw_map.items()}
 
@@ -327,20 +328,19 @@ def process_vendor_row(vendor_name, row, driver, download_folder, original_folde
     
     return supplier_data, run_summary
 
-def setup_selenium(config: dict):
+def setup_selenium(config):
     """Initialize Selenium WebDriver"""
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.chrome.options import Options
     from selenium.common.exceptions import SessionNotCreatedException
     from webdriver_manager.chrome import ChromeDriverManager
-    import subprocess
-    import re
     
-    chrome_settings = config.get('chrome', {})
+    # Access chrome config via typed attribute
+    chrome_settings = config.chrome
     
     options = Options()
-    if chrome_settings.get('headless', True):
+    if chrome_settings.headless:
         options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920x1080")
@@ -348,7 +348,7 @@ def setup_selenium(config: dict):
     options.add_argument("--disable-dev-shm-usage")
     
     # Try to find Chrome binary
-    chrome_path = chrome_settings.get('binary_path', '')
+    chrome_path = chrome_settings.binary_path
     if not chrome_path:
         chrome_path = shutil.which("chrome") or shutil.which("google-chrome") or shutil.which("chrome.exe")
         if not chrome_path:
@@ -371,7 +371,7 @@ def setup_selenium(config: dict):
         driver = webdriver.Chrome(service=Service(driver_exe), options=options)
     except SessionNotCreatedException:
         logging.warning("Chrome crashed in headless mode, retrying without headless")
-        if chrome_settings.get('retry_without_headless', True):
+        if chrome_settings.retry_without_headless:
             options_no_head = Options()
             options_no_head.add_argument("--window-size=1920x1080")
             options_no_head.add_argument("--no-sandbox")
@@ -384,15 +384,13 @@ def setup_selenium(config: dict):
     return driver
 
 def main():
-    # Load config
-    config_path = PROJECT_ROOT / "config.yaml"
-    config = load_config(config_path)
-    paths = config.get('paths', {})
+    # Load config (returns AppConfig dataclass)
+    config = load_config()
     
-    # Set up directories
-    cache_dir = PROJECT_ROOT / paths.get('cache_dir', 'data/cache')
-    output_dir = PROJECT_ROOT / paths.get('output_dir', 'data/output')
-    logs_dir = PROJECT_ROOT / paths.get('logs_dir', 'logs')
+    # Set up directories using typed config
+    cache_dir = config.paths.cache_dir
+    output_dir = config.paths.output_dir
+    logs_dir = config.paths.logs_dir
     
     download_folder = cache_dir / 'downloads'
     download_folder.mkdir(parents=True, exist_ok=True)
@@ -417,15 +415,13 @@ def main():
         image_folder = cache_dir / "scraped_images"
     else:
         # Try to get from config, otherwise fallback to hardcoded defaults (for backward compatibility)
-        original_folder_str = paths.get('original_images_dir')
-        if original_folder_str:
-            original_folder = Path(original_folder_str)
+        if config.paths.original_images_dir:
+            original_folder = config.paths.original_images_dir
         else:
             original_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "original billeder" / "Produktbilleder"
             
-        image_folder_str = paths.get('external_images_dir')
-        if image_folder_str:
-            image_folder = Path(image_folder_str)
+        if config.paths.external_images_dir:
+            image_folder = config.paths.external_images_dir
         else:
             image_folder = user_profile / "OneDrive - Bunzl Continental Europe" / "Documents - Bonvig" / "Produktbilleder_1500x1500"
     
@@ -441,15 +437,12 @@ def main():
     if len(sys.argv) > 1:
         input_path = Path(sys.argv[1])
     
-    if not input_path.exists():
+    products = load_json(input_path, default=None)
+    if products is None:
         logger.error(f"Input file not found: {input_path}")
         sys.exit(1)
     
     logger.info(f"Input: {input_path}")
-    
-    with open(input_path, 'r', encoding='utf-8') as f:
-        products = json.load(f)
-    
     logger.info(f"Loaded {len(products)} products")
     
     # Load vendor map
@@ -486,8 +479,8 @@ def main():
             run_summary_list.append(run_summary)
             
             # Write incrementally
-            atomic_write_json(supplier_data_list, output_json)
-            atomic_write_json(run_summary_list, summary_json)
+            save_json(output_json, supplier_data_list, atomic=True)
+            save_json(summary_json, run_summary_list, atomic=True)
             
         except Exception as e:
             logger.error(f"Failed to process {prod_num}: {e}", exc_info=True)

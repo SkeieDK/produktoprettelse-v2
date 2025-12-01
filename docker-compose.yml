@@ -6,6 +6,8 @@ services:
     volumes:
       # Map local data folder to container data folder
       - ./data:/app/data
+      # Map local cache folder to container cache folder
+      - ./cache:/app/cache
       # Map local logs folder to container logs folder
       - ./logs:/app/logs
       # Map config file so you can edit it locally
@@ -22,4 +24,4 @@ services:
     ports:
       - "8501:8501"
     # Run Streamlit app instead of the default pipeline script
-    command: streamlit run app/app.py --server.address=0.0.0.0 
+    command: streamlit run app/app.py --server.address=0.0.0.0

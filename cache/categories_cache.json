@@ -10406,6 +10406,47 @@
     ]
   },
   {
+    "number": "1613",
+    "b2BGroupId": "1613",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 5289,
+    "modified": true,
+    "editedDate": "2025-11-13T18:01:35.1",
+    "texts": {
+      "items": [
+        {
+          "id": 3648,
+          "categoryNumber": "1613",
+          "url": "https://engrosrengoringsmidler.dk/shop/proff-service-5289c1.html",
+          "name": "Proff-Service",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap.webp",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
+    ]
+  },
+  {
     "number": "16955",
     "b2BGroupId": "16955",
     "infoLayout": 0,
@@ -21603,6 +21644,48 @@
     ]
   },
   {
+    "number": "30987",
+    "b2BGroupId": "30987",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 6007,
+    "modified": false,
+    "editedDate": "2025-11-14T09:25:39.393",
+    "createdDate": "2025-11-14T09:25:04.633",
+    "texts": {
+      "items": [
+        {
+          "id": 4363,
+          "categoryNumber": "30987",
+          "url": "https://engrosrengoringsmidler.dk/shop/alleroed-gymnasium-6007c1.html",
+          "name": "Allerød Gymnasium",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap-o.jpg",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
+    ]
+  },
+  {
     "number": "3100000000000",
     "b2BGroupId": "0",
     "infoLayout": 0,
@@ -21684,6 +21767,48 @@
     "segmentIds": [],
     "parentIds": [
       "3000000000000"
+    ]
+  },
+  {
+    "number": "31118",
+    "b2BGroupId": "31118",
+    "infoLayout": 0,
+    "listLayout": 0,
+    "customInfoLayout": 0,
+    "id": 6008,
+    "modified": false,
+    "editedDate": "2025-11-28T08:43:29.25",
+    "createdDate": "2025-11-28T08:38:36.003",
+    "texts": {
+      "items": [
+        {
+          "id": 4364,
+          "categoryNumber": "31118",
+          "url": "https://engrosrengoringsmidler.dk/shop/wlm-group-6008c1.html",
+          "name": "WLM Group",
+          "siteId": 26,
+          "hidden": false,
+          "sortOrder": 50,
+          "link": "/images/Turkis-knap.webp",
+          "description": "<html>\r\n\t<head>\r\n\t\t<title>\r\n\t\t</title>\r\n\t</head>\r\n\t<body>\r\n\t</body>\r\n</html>\r\n",
+          "icon": "",
+          "string": "",
+          "image": "",
+          "keywords": "",
+          "metaDescription": "",
+          "title": "",
+          "hiddenMobile": false,
+          "urlName": "",
+          "footer": ""
+        }
+      ],
+      "hasMore": false,
+      "count": 1,
+      "url": ""
+    },
+    "segmentIds": [],
+    "parentIds": [
+      "315"
     ]
   },
   {
@@ -42176,47 +42301,6 @@
           "sortOrder": 50,
           "link": "/images/Turkis-knap.webp",
           "description": "<html>\r\n<head>\r\n\t<title></title>\r\n</head>\r\n<body></body>\r\n<style class=\"stylish\" id=\"stylish-4\" type=\"text/css\">div#cke_LongDescription2 {\r\n    display: none;\r\n}\r\n</style>\r\n</html>\r\n",
-          "icon": "",
-          "string": "",
-          "image": "",
-          "keywords": "",
-          "metaDescription": "",
-          "title": "",
-          "hiddenMobile": false,
-          "urlName": ""
-        }
-      ],
-      "hasMore": false,
-      "count": 1,
-      "url": ""
-    },
-    "segmentIds": [],
-    "parentIds": [
-      "315"
-    ]
-  },
-  {
-    "number": "772",
-    "b2BGroupId": "1613",
-    "infoLayout": 0,
-    "listLayout": 0,
-    "customInfoLayout": 0,
-    "id": 5289,
-    "customListLayout": 0,
-    "modified": true,
-    "editedDate": "2024-08-13T12:15:32.803",
-    "texts": {
-      "items": [
-        {
-          "id": 3648,
-          "categoryNumber": "772",
-          "url": "https://engrosrengoringsmidler.dk/shop/proff-service-5289c1.html",
-          "name": "Proff-Service",
-          "siteId": 26,
-          "hidden": false,
-          "sortOrder": 50,
-          "link": "/images/Turkis-knap.webp",
-          "description": "<html>\r\n<head>\r\n\t<title></title>\r\n</head>\r\n<body></body>\r\n</html>\r\n",
           "icon": "",
           "string": "",
           "image": "",

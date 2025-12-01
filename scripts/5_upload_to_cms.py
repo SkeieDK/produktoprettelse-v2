@@ -28,20 +28,21 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.utils import setup_logging, load_config, atomic_write_json
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config, get_project_root
+from core.logging import setup_logging
+from core.file_utils import load_json, save_json
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Setup paths
 # PROJECT_ROOT is already defined above
-config_path = PROJECT_ROOT / "config.yaml"
-config = load_config(config_path)
-paths = config.get("paths", {})
+config = load_config()
 
 DATA_DIR = PROJECT_ROOT / "data"
-DATA_OUTPUT = PROJECT_ROOT / paths.get("output_dir", "data/output")
-LOGS_DIR = PROJECT_ROOT / paths.get("logs_dir", "logs")
+DATA_OUTPUT = config.paths.output_dir
+LOGS_DIR = config.paths.logs_dir
 LOGS_DIR.mkdir(exist_ok=True)
 
 # Image source directory (1500x1500 processed images)
@@ -53,7 +54,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 DOCKER_IMAGES_DIR = Path("/mnt/product_images")
 ENV_IMAGES_DIR = os.getenv("EXTERNAL_IMAGES_DIR")
-CONFIG_IMAGES_DIR = paths.get("external_images_dir")
+CONFIG_IMAGES_DIR = config.paths.external_images_dir
 
 if DOCKER_IMAGES_DIR.exists():
     IMAGES_SOURCE_DIR = DOCKER_IMAGES_DIR
@@ -111,16 +112,11 @@ class DandomainUploader:
         
         # Load products cache for duplicate checking
         cache_file = PROJECT_ROOT / "cache" / "products_cache.json"
-        self.existing_products = []
-        if cache_file.exists():
-            try:
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    self.existing_products = json.load(f)
-                logger.info(f"Loaded {len(self.existing_products)} existing products from cache")
-            except Exception as e:
-                logger.warning(f"Could not load products cache: {e}")
+        self.existing_products = load_json(cache_file, default=[])
+        if self.existing_products:
+            logger.info(f"Loaded {len(self.existing_products)} existing products from cache")
         else:
-            logger.warning("products_cache.json not found - cannot check for duplicates!")
+            logger.warning("products_cache.json not found or empty - cannot check for duplicates!")
         
         logger.info("Dandomain uploader initialized")
         if self.dry_run:
@@ -885,12 +881,10 @@ def main():
     
     # Load products
     input_file = DATA_OUTPUT / args.input
-    if not input_file.exists():
+    products = load_json(input_file, default=None)
+    if products is None:
         logger.error(f"Input file not found: {input_file}")
         sys.exit(1)
-    
-    with open(input_file, 'r', encoding='utf-8') as f:
-        products = json.load(f)
     
     logger.info(f"Loaded {len(products)} products from {args.input}")
     
@@ -919,7 +913,7 @@ def main():
     
     # Save results
     results_file = DATA_OUTPUT / "upload_results.json"
-    atomic_write_json(results, results_file)
+    save_json(results_file, results, atomic=True)
     
     logger.info(f"\nResults saved to: {results_file}")
     

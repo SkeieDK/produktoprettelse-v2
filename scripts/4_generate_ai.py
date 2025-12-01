@@ -25,16 +25,18 @@ Logs to: logs/4_generate_ai.log
 import json
 import sys
 import logging
-import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
-import yaml
-from dotenv import load_dotenv
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config, get_api_key, get_project_root
+from core.logging import get_logger, setup_logging
+from core.file_utils import load_json, save_json, atomic_write_json
 
 from ai_config import (
     get_model_config,
@@ -47,26 +49,8 @@ from ai_config import (
 from scripts.ai_agents import WriterAgent, ReviewerAgent
 from openai import OpenAI
 import numpy as np
-from scripts.utils import setup_logging, load_config, atomic_write_json
 
-def get_api_key(logger, config):
-    """Get OpenAI API key from .env, environment, or config."""
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-        logger.debug(f"Loaded .env from {env_path}")
-    
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_API_KEY")
-    if api_key:
-        logger.info("Using OpenAI API key from environment (.env or system)")
-        return api_key
-    
-    if config.get("ai", {}).get("api_key"):
-        logger.info("Using OpenAI API key from config")
-        return config["ai"]["api_key"]
-    
-    logger.warning("No OpenAI API key found. Set OPENAI_API_KEY in .env file.")
-    return None
+# get_api_key is now imported from core.config
 
 
 def call_agent_pipeline(
@@ -254,20 +238,13 @@ def calculate_quality_score(product: Dict[str, Any]) -> float:
 def load_example_cache(cache_dir: Path) -> Dict[str, Any]:
     """Load cached quality scores and embeddings."""
     cache_file = cache_dir / "example_quality_cache.json"
-    if cache_file.exists():
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {"quality_scores": {}, "embeddings": {}}
-    return {"quality_scores": {}, "embeddings": {}}
+    return load_json(cache_file, default={"quality_scores": {}, "embeddings": {}})
 
 
 def save_example_cache(cache_dir: Path, cache_data: Dict[str, Any]):
     """Save quality scores and embeddings to cache."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "example_quality_cache.json"
-    atomic_write_json(cache_data, cache_file)
+    save_json(cache_file, cache_data, atomic=True)
 
 
 def get_embedding(client: OpenAI, text: str, model: str = EMBEDDING_MODEL) -> Optional[list]:
@@ -468,9 +445,8 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     Uses Agents SDK which handles Chat Completions and Responses API transparently.
     Includes quality-aware example selection from existing products.
     """
-    paths = config.get("paths", {})
-    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
-    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
+    output_dir = config.paths.output_dir
+    cache_dir = config.paths.cache_dir
     
     if input_file:
         enriched_path = Path(input_file)
@@ -483,7 +459,7 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
         logger.error(f"Input file not found: {enriched_path}")
         return False
     
-    api_key = get_api_key(logger, config)
+    api_key = get_api_key(required=False)
     if not api_key:
         logger.warning("Running in DRY-RUN mode (no API key). Showing mock AI fields.")
         dry_run = True
@@ -515,11 +491,10 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
             logger.error(f"Failed to initialize agents: {e}")
             return False
     
-    ai_config = config.get("ai", {})
     model_config = get_model_config(step="enrichment")
     
     primary_model = model_config["model"]
-    quality_threshold = ai_config.get("quality_threshold", 0.70)
+    quality_threshold = config.get("ai", {}).get("quality_threshold", 0.70)
     
     logger.info(f"AI Enrichment Setup (Modular Agents):")
     logger.info(f"  Writer model: {primary_model}")
@@ -528,17 +503,11 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     
     # Load existing products for examples
     final_products_path = output_dir / "final_products.json"
-    existing_products = []
-    if final_products_path.exists():
-        try:
-            with open(final_products_path, 'r', encoding='utf-8') as f:
-                existing_products = json.load(f)
-                if isinstance(existing_products, dict):
-                    existing_products = [existing_products]
-            logger.info(f"  Loaded {len(existing_products)} existing products for examples")
-        except Exception as e:
-            logger.warning(f"  Could not load existing products: {e}")
-            existing_products = []
+    existing_products = load_json(final_products_path, default=[])
+    if isinstance(existing_products, dict):
+        existing_products = [existing_products]
+    if existing_products:
+        logger.info(f"  Loaded {len(existing_products)} existing products for examples")
     else:
         logger.info(f"  No existing products found (first run)")
     
@@ -548,21 +517,14 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     
     # Load golden examples from UI (if available)
     golden_examples_path = cache_dir / "golden_examples.json"
-    golden_examples = {}
-    if golden_examples_path.exists():
-        try:
-            with open(golden_examples_path, 'r', encoding='utf-8') as f:
-                golden_examples = json.load(f)
-            logger.info(f"  Loaded golden examples: {sum(len(v) for v in golden_examples.values())} examples across {len(golden_examples)} categories")
-        except Exception as e:
-            logger.warning(f"  Could not load golden examples: {e}")
-            golden_examples = {}
+    golden_examples = load_json(golden_examples_path, default={})
+    if golden_examples:
+        logger.info(f"  Loaded golden examples: {sum(len(v) for v in golden_examples.values())} examples across {len(golden_examples)} categories")
     else:
         logger.debug(f"  No golden examples configured yet")
     
     logger.info(f"Loading products: {enriched_path}")
-    with open(enriched_path, 'r', encoding='utf-8') as f:
-        products = json.load(f)
+    products = load_json(enriched_path, default=[])
     
     if isinstance(products, dict):
         products = [products]
@@ -672,9 +634,8 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
     try:
         cost_file = output_dir / "ai_costs.json"
         # If file exists, load it to accumulate costs
-        if cost_file.exists():
-            with open(cost_file, 'r', encoding='utf-8') as f:
-                existing_costs = json.load(f)
+        existing_costs = load_json(cost_file, default={})
+        if existing_costs:
             # Accumulate total cost
             total_cost_accumulated = existing_costs.get("total_cost_usd", 0.0) + cost_summary["total_cost_usd"]
             cost_summary["total_cost_usd"] = round(total_cost_accumulated, 6)
@@ -684,7 +645,7 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
                 existing_by_model[model] = round(existing_by_model.get(model, 0.0) + cost, 6)
             cost_summary["cost_by_model"] = existing_by_model
         
-        atomic_write_json(cost_summary, cost_file)
+        save_json(cost_file, cost_summary, atomic=True)
         logger.info(f"✓ Cost summary saved: {cost_file}")
         logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
     except Exception as e:
@@ -706,10 +667,8 @@ def generate_ai_descriptions(logger, config, input_file: Optional[str] = None):
 
 def main():
     """Main entry point."""
-    config_path = PROJECT_ROOT / "config.yaml"
-    config = load_config(config_path)
-    paths = config.get("paths", {})
-    log_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
+    config = load_config()
+    log_dir = config.paths.logs_dir
     
     logger = setup_logging(log_dir, "4_generate_ai")
     

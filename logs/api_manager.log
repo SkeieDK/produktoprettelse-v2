@@ -281,3 +281,117 @@
 2025-11-20 18:37:16,049 INFO Bruger cached produkt data (0.0 timer gammel)
 2025-11-20 18:39:02,782 WARNING Preparing to delete prices for E107680: {'currencyCode': 'DKK', 'quantity': 6, 'unitPrice': 23.0, 'b2bGroupId': '-2', 'specialOfferPrice': 0.0, 'isoCode': 208}
 2025-11-20 18:39:02,950 ERROR Failed to update prices for E107680: API request fejlede: 404 Client Error: Not Found for url: https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products/E107680/prices
+2025-11-21 07:06:16,242 INFO Starter fuld dataopdatering fra API
+2025-11-21 07:06:16,244 INFO Henter produktkategorier fra API...
+2025-11-21 07:06:20,519 INFO Hentet 1244 kategorier i alt
+2025-11-21 07:06:20,581 INFO Henter produkter fra API...
+2025-11-21 07:06:53,576 INFO Hentet 3648 produkter i alt
+2025-11-21 07:06:54,443 INFO Henter produkter fra API...
+2025-11-21 07:07:36,359 INFO Hentet 3648 produkter i alt
+2025-11-21 07:07:38,242 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-21 07:07:38,253 INFO Filtered primary categories count: 195
+2025-11-21 07:07:38,254 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-21 07:07:38,265 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-21 07:07:38,266 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3648, 'total_products_with_prices': 3648, 'categories_with_products': 195}
+2025-11-21 07:36:01,377 INFO Bruger cached produkt data (0.5 timer gammel)
+2025-11-21 07:36:35,504 INFO Bruger cached produkt data (0.5 timer gammel)
+2025-11-21 07:37:49,639 WARNING Preparing to delete prices for E136420 - Deaktiveret: {'currencyCode': 'DKK', 'quantity': 84, 'unitPrice': 39.5, 'b2bGroupId': '-2', 'specialOfferPrice': 0.0, 'isoCode': 208}
+2025-11-21 07:37:50,188 INFO Updated prices for E136420 - Deaktiveret
+2025-11-21 07:37:50,356 INFO Patched product E136420 - Deaktiveret
+2025-11-21 07:37:50,562 INFO Patched product E136420 - Deaktiveret
+2025-11-27 18:59:08,401 INFO Starter fuld dataopdatering fra API
+2025-11-27 18:59:08,404 INFO Henter produktkategorier fra API...
+2025-11-27 18:59:12,321 INFO Hentet 1244 kategorier i alt
+2025-11-27 18:59:12,380 INFO Henter produkter fra API...
+2025-11-27 18:59:45,339 INFO Hentet 3649 produkter i alt
+2025-11-27 18:59:46,242 INFO Henter produkter fra API...
+2025-11-27 19:00:28,339 INFO Hentet 3649 produkter i alt
+2025-11-27 19:00:30,337 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 19:00:30,350 INFO Filtered primary categories count: 195
+2025-11-27 19:00:30,350 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 19:00:30,364 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 19:00:30,364 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 19:01:28,139 INFO Bruger cached produkt data (0.0 timer gammel)
+2025-11-27 19:14:43,555 INFO Starter fuld dataopdatering fra API
+2025-11-27 19:14:43,559 INFO Henter produktkategorier fra API...
+2025-11-27 19:14:47,979 INFO Hentet 1244 kategorier i alt
+2025-11-27 19:14:48,035 INFO Henter produkter fra API...
+2025-11-27 19:14:58,247 INFO Starter fuld dataopdatering fra API
+2025-11-27 19:14:58,248 INFO Henter produktkategorier fra API...
+2025-11-27 19:15:02,587 INFO Hentet 1244 kategorier i alt
+2025-11-27 19:15:02,639 INFO Henter produkter fra API...
+2025-11-27 19:15:20,140 INFO Hentet 3649 produkter i alt
+2025-11-27 19:15:21,074 INFO Henter produkter fra API...
+2025-11-27 19:15:36,166 INFO Hentet 3649 produkter i alt
+2025-11-27 19:15:37,050 INFO Henter produkter fra API...
+2025-11-27 19:15:57,538 INFO Hentet 3649 produkter i alt
+2025-11-27 19:15:59,674 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 19:15:59,688 INFO Filtered primary categories count: 195
+2025-11-27 19:15:59,689 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 19:15:59,700 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 19:15:59,701 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 19:16:13,146 INFO Hentet 3649 produkter i alt
+2025-11-27 19:16:15,084 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 19:16:15,097 INFO Filtered primary categories count: 195
+2025-11-27 19:16:15,098 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 19:16:15,109 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 19:16:15,110 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 19:21:20,736 INFO Bruger cached produkt data (0.1 timer gammel)
+2025-11-27 19:22:09,538 WARNING Preparing to delete prices for E137690 - Deaktiveret: {'currencyCode': 'DKK', 'quantity': 3, 'unitPrice': 318.5, 'b2bGroupId': '-2', 'specialOfferPrice': 0.0, 'isoCode': 208}
+2025-11-27 19:22:09,923 INFO Updated prices for E137690 - Deaktiveret
+2025-11-27 19:22:10,282 INFO Patched product E137690 - Deaktiveret
+2025-11-27 19:22:10,428 INFO Patched product E137690 - Deaktiveret
+2025-11-27 19:36:13,928 INFO Starter fuld dataopdatering fra API
+2025-11-27 19:36:13,930 INFO Henter produktkategorier fra API...
+2025-11-27 19:36:18,064 INFO Hentet 1244 kategorier i alt
+2025-11-27 19:36:18,121 INFO Henter produkter fra API...
+2025-11-27 19:36:49,757 INFO Hentet 3649 produkter i alt
+2025-11-27 19:36:50,611 INFO Henter produkter fra API...
+2025-11-27 19:37:26,121 INFO Hentet 3649 produkter i alt
+2025-11-27 19:37:28,028 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 19:37:28,041 INFO Filtered primary categories count: 195
+2025-11-27 19:37:28,041 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 19:37:28,053 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 19:37:28,054 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 19:38:14,400 INFO Bruger cached produkt data (0.0 timer gammel)
+2025-11-27 19:41:02,305 INFO Updated prices for E137690 - Deaktiveret
+2025-11-27 19:41:02,440 INFO Patched product E137690 - Deaktiveret
+2025-11-27 19:44:57,338 INFO Bruger cached produkt data (0.1 timer gammel)
+2025-11-27 19:46:12,336 WARNING Preparing to delete prices for E136420 - Deaktiveret: {'currencyCode': 'DKK', 'quantity': 84, 'unitPrice': 39.5, 'b2bGroupId': '1', 'specialOfferPrice': 0.0, 'isoCode': 208}
+2025-11-27 19:46:12,746 INFO Updated prices for E136420 - Deaktiveret
+2025-11-27 19:46:12,891 INFO Patched product E136420 - Deaktiveret
+2025-11-27 19:46:13,011 INFO Patched product E136420 - Deaktiveret
+2025-11-27 19:59:00,488 INFO Starter fuld dataopdatering fra API
+2025-11-27 19:59:00,491 INFO Henter produktkategorier fra API...
+2025-11-27 19:59:04,280 INFO Hentet 1244 kategorier i alt
+2025-11-27 19:59:04,332 INFO Henter produkter fra API...
+2025-11-27 19:59:34,499 INFO Hentet 3649 produkter i alt
+2025-11-27 19:59:35,358 INFO Henter produkter fra API...
+2025-11-27 20:00:07,801 INFO Hentet 3649 produkter i alt
+2025-11-27 20:00:09,942 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 20:00:09,955 INFO Filtered primary categories count: 195
+2025-11-27 20:00:09,956 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 20:00:09,974 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 20:00:09,974 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 20:01:00,405 INFO Bruger cached produkt data (0.0 timer gammel)
+2025-11-27 20:01:44,184 WARNING Preparing to delete prices for E137960 - Deaktiveret: {'currencyCode': 'DKK', 'quantity': 3, 'unitPrice': 516.0, 'b2bGroupId': '-2', 'specialOfferPrice': 0.0, 'isoCode': 208}
+2025-11-27 20:01:44,612 INFO Updated prices for E137960 - Deaktiveret
+2025-11-27 20:01:44,613 ERROR Failed to update customField3 for E137960 - Deaktiveret: 'APIManager' object has no attribute '_make_request'
+2025-11-27 21:07:37,627 ERROR Failed to update customField3 for TEST100: API request fejlede: 401 Client Error: Unauthorized for url: https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products/TEST100/sites/26/settings
+2025-11-27 20:13:39,542 INFO Starter fuld dataopdatering fra API
+2025-11-27 20:13:39,544 INFO Henter produktkategorier fra API...
+2025-11-27 20:13:43,955 INFO Hentet 1244 kategorier i alt
+2025-11-27 20:13:44,010 INFO Henter produkter fra API...
+2025-11-27 20:14:15,514 INFO Hentet 3649 produkter i alt
+2025-11-27 20:14:16,373 INFO Henter produkter fra API...
+2025-11-27 20:14:53,474 INFO Hentet 3649 produkter i alt
+2025-11-27 20:14:55,336 INFO Updated products cache written successfully to: /app/cache/products_cache.json
+2025-11-27 20:14:55,349 INFO Filtered primary categories count: 195
+2025-11-27 20:14:55,349 INFO Writing filtered categories to: /app/cache/categories_with_products.json
+2025-11-27 20:14:55,361 INFO Filtered categories written successfully to: /app/cache/categories_with_products.json
+2025-11-27 20:14:55,361 INFO Fuld dataopdatering færdig: {'total_categories': 1244, 'total_products': 3649, 'total_products_with_prices': 3649, 'categories_with_products': 195}
+2025-11-27 20:15:28,117 INFO Bruger cached produkt data (0.0 timer gammel)
+2025-11-27 20:16:24,201 WARNING Preparing to delete prices for E137900 - Deaktiveret: {'currencyCode': 'DKK', 'quantity': 3, 'unitPrice': 303.25, 'b2bGroupId': '-2', 'specialOfferPrice': 0.0, 'isoCode': 208}
+2025-11-27 20:16:24,540 INFO Updated prices for E137900 - Deaktiveret
+2025-11-27 20:16:24,661 INFO Patched product E137900 - Deaktiveret settings (customField3=Tilbud) for site 26
+2025-11-27 20:16:24,772 ERROR Failed to patch product E137900 - Deaktiveret: API request fejlede: 404 Client Error: Not Found for url: https://engrosrengoringsmidler.dk/admin/WebAPI/v2/products/E137900%20-%20Deaktiveret

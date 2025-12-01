@@ -19,13 +19,10 @@ Logs to: logs/3.5_categorize.log
 import json
 import sys
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
-import yaml
-from dotenv import load_dotenv
 from openai import OpenAI
 import numpy as np
 
@@ -33,31 +30,15 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Use core utilities (consolidated from multiple implementations)
+from core.config import load_config, get_api_key, get_project_root
+from core.logging import get_logger, setup_logging
+from core.file_utils import load_json, save_json, atomic_write_json
+
 from api_manager import get_categories, get_products
 from ai_config import get_model_config, calculate_cost, PRICING
-from scripts.utils import setup_logging, load_config, atomic_write_json
 
-def get_api_key(logger, config):
-    """Get OpenAI API key from .env, environment, or config."""
-    # Load .env file
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-        logger.debug(f"Loaded .env from {env_path}")
-    
-    # Try environment variable first
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_API_KEY")
-    if api_key:
-        logger.info("Using OpenAI API key from environment (.env or system)")
-        return api_key
-    
-    # Try config file
-    if config.get("ai", {}).get("api_key"):
-        logger.info("Using OpenAI API key from config")
-        return config["ai"]["api_key"]
-    
-    logger.error("No API key found! Set OPENAI_API_KEY in .env or config.yaml")
-    return None
+# get_api_key is now imported from core.config
 
 
 def build_category_text(category: Dict, example_products: List[Dict]) -> str:
@@ -243,10 +224,8 @@ def load_or_generate_category_embeddings(
     # Try to load from cache
     if cache_file.exists() and not force_refresh:
         logger.info(f"Loading cached category embeddings from {cache_file}...")
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-            
+        cache_data = load_json(cache_file, default=None)
+        if cache_data:
             # Validate cache has all categories
             cached_ids = set(cache_data.keys())
             current_ids = set(str(cat.get('id', '')) for cat in categories if cat.get('id'))
@@ -256,8 +235,6 @@ def load_or_generate_category_embeddings(
                 return cache_data
             else:
                 logger.warning(f"Cache mismatch: {len(current_ids - cached_ids)} new categories, regenerating...")
-        except Exception as e:
-            logger.warning(f"Failed to load cache: {e}, regenerating...")
     
     # Generate embeddings
     logger.info(f"Generating embeddings for {len(categories)} categories (this may take a minute)...")
@@ -291,7 +268,7 @@ def load_or_generate_category_embeddings(
     
     # Save to cache
     logger.info(f"Saving category embeddings to cache...")
-    atomic_write_json(embeddings, cache_file)
+    save_json(cache_file, embeddings, atomic=True)
     
     logger.info(f"Category embeddings cached to {cache_file}")
     return embeddings
@@ -450,7 +427,7 @@ def process_products(
     categories: List[Dict],
     api_products: List[Dict],
     client: OpenAI,
-    config: Dict,
+    config,
     logger
 ) -> Tuple[List[Dict], Dict[str, float]]:
     """
@@ -460,8 +437,7 @@ def process_products(
         Tuple of (categorized_products, cost_tracking_dict)
     """
     confidence_threshold = config.get("categorization", {}).get("confidence_threshold", 70)
-    paths = config.get("paths", {})
-    cache_dir = PROJECT_ROOT / paths.get("cache_dir", "data/cache")
+    cache_dir = config.paths.cache_dir
     
     # Build category ID to number mapping (for setting primaryCategoryId)
     # categories from API have both 'id' and 'number'
@@ -651,18 +627,16 @@ def main():
     print("="*60 + "\n")
     
     # Load config
-    config_path = PROJECT_ROOT / "config.yaml"
-    config = load_config(config_path)
-    paths = config.get("paths", {})
-    log_dir = PROJECT_ROOT / paths.get("logs_dir", "logs")
-    output_dir = PROJECT_ROOT / paths.get("output_dir", "data/output")
+    config = load_config()
+    log_dir = config.paths.logs_dir
+    output_dir = config.paths.output_dir
     
     # Setup logging
     logger = setup_logging(log_dir, "3.5_categorize")
     logger.info("Starting embedding-based product categorization...")
     
     # Get API key
-    api_key = get_api_key(logger, config)
+    api_key = get_api_key(required=False)
     if not api_key:
         print("\n[ERROR] No OpenAI API key found!")
         print("   Set OPENAI_API_KEY in .env or config.yaml")
@@ -681,8 +655,12 @@ def main():
         return 1
     
     logger.info(f"Loading products from {input_file}...")
-    with open(input_file, 'r', encoding='utf-8') as f:
-        products = json.load(f)
+    products = load_json(input_file, default=None)
+    if products is None:
+        logger.error(f"Input file not found: {input_file}")
+        print(f"\n[ERROR] {input_file} not found!")
+        print("   Run Step 3 (3_process_images.py) first")
+        return 1
     logger.info(f"Loaded {len(products)} products")
     
     # Load categories from API
@@ -690,14 +668,12 @@ def main():
     try:
         # Load RAW categories from cache (has 'id' and 'number' fields)
         categories_cache_file = PROJECT_ROOT / "cache" / "categories_cache.json"
-        if not categories_cache_file.exists():
+        categories = load_json(categories_cache_file, default=None)
+        if categories is None:
             logger.error("categories_cache.json not found. Run API sync first.")
             print("\n[ERROR] categories_cache.json not found")
             print("   Run 'Opdater Cache' in Streamlit first")
             return 1
-        
-        with open(categories_cache_file, 'r', encoding='utf-8') as f:
-            categories = json.load(f)
         
         logger.info(f"Loaded {len(categories)} categories from cache")
     except Exception as e:
@@ -711,14 +687,11 @@ def main():
     try:
         # Load RAW products from cache (has 'id', 'number', 'primaryCategoryId', etc.)
         products_cache_file = PROJECT_ROOT / "cache" / "products_cache.json"
-        if not products_cache_file.exists():
-            logger.warning("products_cache.json not found. Will continue without product examples.")
-            api_products = []
-        else:
-            with open(products_cache_file, 'r', encoding='utf-8') as f:
-                api_products = json.load(f)
-            
+        api_products = load_json(products_cache_file, default=[])
+        if api_products:
             logger.info(f"Loaded {len(api_products)} existing products from cache")
+        else:
+            logger.warning("products_cache.json not found. Will continue without product examples.")
     except Exception as e:
         logger.warning(f"Failed to load products (will continue without examples): {e}")
         api_products = []
@@ -746,7 +719,7 @@ def main():
     output_file = output_dir / "categorized_products.json"
     logger.info(f"Saving categorized products to {output_file}...")
     
-    atomic_write_json(categorized_products, output_file)
+    save_json(output_file, categorized_products, atomic=True)
     
     # Save or update cost information
     cost_summary = {
@@ -765,9 +738,8 @@ def main():
     try:
         cost_file = output_dir / "ai_costs.json"
         # If file exists, load it to accumulate costs
-        if cost_file.exists():
-            with open(cost_file, 'r', encoding='utf-8') as f:
-                existing_costs = json.load(f)
+        existing_costs = load_json(cost_file, default={})
+        if existing_costs:
             # Accumulate total cost
             total_cost_accumulated = existing_costs.get("total_cost_usd", 0.0) + cost_summary["total_cost_usd"]
             cost_summary["total_cost_usd"] = round(total_cost_accumulated, 6)
@@ -779,7 +751,7 @@ def main():
             # Add step-specific metadata
             cost_summary["products_processed"] = existing_costs.get("products_processed", 0) + len(categorized_products)
         
-        atomic_write_json(cost_summary, cost_file)
+        save_json(cost_file, cost_summary, atomic=True)
         logger.info(f"✓ Cost summary saved: {cost_file}")
         logger.info(f"  Total cost: ${cost_summary['total_cost_usd']:.6f}")
     except Exception as e:

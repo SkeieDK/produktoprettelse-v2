@@ -1,0 +1,49 @@
+[
+  {
+    "product": "TEST100",
+    "action": "create",
+    "operations": [
+      {
+        "delete": {
+          "currencyCode": "DKK",
+          "quantity": 6,
+          "unitPrice": 23.0,
+          "b2bGroupId": "-2",
+          "id": "p2",
+          "amount": 6
+        },
+        "create": {
+          "unitPrice": 23.0,
+          "currencyCode": "DKK",
+          "quantity": 6,
+          "b2bGroupId": "1",
+          "specialOfferPrice": null,
+          "specialOfferPeriodId": null,
+          "amount": 6
+        }
+      },
+      {
+        "update": {
+          "unitPrice": 100.0,
+          "currencyCode": "DKK",
+          "quantity": 1,
+          "b2bGroupId": "-2",
+          "specialOfferPrice": 80.0,
+          "specialOfferPeriodId": "1",
+          "id": "p1"
+        }
+      }
+    ],
+    "context": {
+      "custom_field3": "Tilbud",
+      "price_entry": {
+        "id": "p1",
+        "b2bGroupId": "-2",
+        "quantity": 1,
+        "unitPrice": 100.0,
+        "currencyCode": "DKK",
+        "specialOfferPrice": 80.0
+      }
+    }
+  }
+]
