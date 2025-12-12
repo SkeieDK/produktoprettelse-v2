@@ -73,8 +73,9 @@ class ProductDescriptionAgent:
             
             # GPT-5 models require different parameters
             if self.model.startswith("gpt-5"):
-                # GPT-5: no temperature, uses max_completion_tokens (need higher limit)
-                api_params["max_completion_tokens"] = 8000
+                # GPT-5 models use reasoning tokens internally (can be 10x output)
+                # Need high limit: 16000 = ~4000 output + ~12000 reasoning
+                api_params["max_completion_tokens"] = 16000
             else:
                 # Other models: support temperature and max_tokens
                 api_params["temperature"] = self.temperature
@@ -156,11 +157,16 @@ EMBEDDING_MODEL = "text-embedding-3-small"          # For semantic similarity
 CATEGORIZATION_FALLBACK_MODEL = "gpt-3.5-turbo"     # Used only if confidence < 70%
 
 # ---- STEP 4: AI Enrichment (Descriptions) ----
-# Agents SDK transparently handles both Chat Completions and gpt-5 models
-# GPT-5 models have restrictions: no temperature, uses max_completion_tokens
-ENRICHMENT_PRIMARY_MODEL = "gpt-5-mini"             # Primary: cheapest (~$0.05/1K input)
-ENRICHMENT_FALLBACK_MODEL = "gpt-4o-mini"           # Fallback: proven (~$0.15/1K input)
-REVIEWER_MODEL = "gpt-4o-mini"                      # Reviewer: fast & cheap for validation
+# Model selection guide:
+#   - gpt-4o: Best instruction following, highest quality (~$2.50/$10 per 1M tokens)
+#   - gpt-4o-mini: Good for simple tasks, cost-effective (~$0.15/$0.60 per 1M tokens)
+#   - gpt-4.1-mini: Better instruction following than 4o-mini (if available)
+#
+# For DESC_LONG with specific HTML formatting (<br /> tags), use gpt-4o.
+# gpt-4o-mini often ignores detailed formatting instructions.
+ENRICHMENT_PRIMARY_MODEL = "gpt-5-mini"             # Compare: GPT-5-mini reasoning vs formatting
+ENRICHMENT_FALLBACK_MODEL = "gpt-4o-mini"           # Fallback: if primary fails
+REVIEWER_MODEL = "gpt-4o-mini"                      # Reviewer: just validates JSON, cheap model OK
 
 # ---- PROMPT PATHS ----
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")

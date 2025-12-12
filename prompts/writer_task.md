@@ -1,60 +1,50 @@
-Generate product descriptions for the following product:
+Generate a structured JSON product description with HTML formatting.
 
-## Product Details
-- **Product Name:** {product_name}
+## Product Data
+- **Name:** {product_name}
 - **Category:** {category}
 - **Brand:** {brand}
 - **Color:** {color}
 - **Size:** {size}
 - **Packaging:** {packaging}
 - **Certifications:** {certifications}
-- **Tax/Afgift:** {afgift}
+- **Afgift (packaging fee):** {afgift} DKK
 
 ## Supplier Information
 {supplier_info}
 
-## Product URL
-{product_url}
+## OUTPUT FORMAT (valid JSON only)
+{{
+  "DESC_SHORT": "Concise one-liner description, max 100 chars, NO HTML",
+  "DESC_LONG": "Rich HTML-formatted description with <strong>labels:</strong> value format. Use <br /><br /> between sections. Include materials, dimensions, certifications, usage, storage info.",
+  "PROD_SEARCHWORD": "keyword1, keyword2, keyword3, keyword4, keyword5",
+  "META_DESCRIPTION": "SEO description under 160 chars, NO HTML, must end with Køb her »"
+}}
 
-## Required Output Fields
-1. **DESC_SHORT**: A short 2–5 word descriptive fragment (not a sentence) capturing the product’s core function or feature.
+## IMPORTANT RULES FOR DESC_LONG
+1. Start with primary use case
+2. Use plain text `Field Name: value` format for regular specifications (e.g., `Materiale: PP`)
+3. Use `<strong>` ONLY for special sections: `<strong>OBS:</strong>` and section headers like `<strong>Øvrig information</strong>`
+4. Separate sections with `<br /><br />`
+5. Include all available: material, dimensions, temperature range, approvals, packaging details
+6. Group related specs together (e.g., dimensions: height, diameter, volume)
+7. Add usage scenarios and benefits at the end
+8. **Never use newlines - only `<br />` and `<br /><br />`**
+9. If afgift > 0, include: `<strong>OBS:</strong> Prisen er eksklusiv emballageafgift. Se den samlede pris i kurven.<br /><br />`
 
-2. **DESC_LONG**:
-   - **Structure**:
-     - 1–2 paragraphs explaining purpose, benefits, and typical applications.
-     - Optional paragraph covering certifications or sustainable materials (only if relevant).
-     - Separate paragraph for the afgift notice if triggered.
-     - End with a structured specification list in this exact order:
-       - Farve: {color}
-       - Størrelse: {size}
-       - Brand: {brand}
-       - Certificeringer: {certifications}
-       - Forpakning: {packaging}
-   - **Sustainability Rules**:
-     Mention sustainability ONLY if supported by:
-     - Recognized certifications (e.g., FSC, EU Økologisk, Svanemærket), OR
-     - Clearly sustainable materials (e.g., bagasse, RPET, PLA, recycled plastic).
-     Never:
-     - Invent sustainability benefits
-     - Use vague claims like “bæredygtig”, “miljøvenlig”, “grøn” unless justified
-     - Imply environmental advantages not grounded in data
-   - **Afgift Logic**:
-     If “Tax/Afgift” is a numeric value > 0:
-       Add this paragraph on its own line:
-       "OBS: Prisen er eksklusiv emballageafgift. Se den samlede pris i kurven."
-     If the value is 0, not numeric, or unknown:
-       Do NOT include afgift text.
+## EXAMPLE OUTPUT
+{{
+  "DESC_SHORT": "Hvide drikkebæger til take-away og venteværelser",
+  "DESC_LONG": "Klassiske hvide drikkebæger af plast til brug i venteværelse, eller når rent service er udenfor rækkevidde. Hver kasse indeholder 3000 drikkebæger fordelt i 30 poser.<br /><br /><strong>OBS:</strong> Prisen er eksklusiv emballageafgift. Se den samlede pris i kurven.<br /><br />Materiale: PP - Polypropylen<br />Højde: 9,8 cm<br />Diameter: 7 cm<br />Volumen: 21 cl<br />Godkendelse: -40 °C til +100 °C<br />Forpakning: 30 ps x 100 stk.<br /><br /><strong>Øvrig information (kun til storkøb)</strong><br />Antal salgsenheder på palle: 18 ks.",
+  "PROD_SEARCHWORD": "drikkebæger, plastbæger, hvide bæger, engangsbæger, take-away bæger",
+  "META_DESCRIPTION": "Hvide drikkebæger til B2B. 3000 stk per kasse, temperaturtest godkendt. Køb her »"
+}}
 
-3. **PROD_SEARCHWORD**: Provide 5–10 relevant generic search keywords. Do NOT include:
-   - The product name
-   - The brand name
-   - Uncommon adjectives or filler words
+## Sustainability Rules
+- Mention ONLY if supported by certifications (FSC, Svanemærket) or materials (RPET, PLA, bagasse).
+- Do not invent claims or use vague terms.
 
-4. **META_DESCRIPTION**:
-   - Max 155 characters
-   - Must be factual and avoid claims not supported by product data
-   - End with: “Køb her »”
-
-## Output Rules
-- Return ONLY a valid JSON object.
-- No additional commentary, markdown, text, or explanations.
+## Validation
+- Output must be valid JSON.
+- No markdown, no extra text.
+- DESC_LONG **MUST** contain `<br />` tags

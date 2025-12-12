@@ -4,6 +4,8 @@ FROM python:3.12-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    # Timezone for Denmark/CET
+    TZ=Europe/Copenhagen \
     # Chrome options for Docker
     CHROME_BIN=/usr/bin/google-chrome \
     CHROME_PATH=/usr/lib/chromium/
@@ -17,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     unzip \
     curl \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \

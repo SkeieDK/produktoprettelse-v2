@@ -12,8 +12,8 @@ from typing import Dict, Optional, Any
 from pathlib import Path
 from openai import OpenAI
 
-# Setup logging
-logger = logging.getLogger("ai_agents")
+# Setup logging: use step logger if available, else fall back
+logger = logging.getLogger("4_generate_ai")
 
 class BaseAgent:
     """Base class for AI agents handling common API logic."""
@@ -55,7 +55,9 @@ class BaseAgent:
             
             # Handle model-specific parameters
             if self.model.startswith("gpt-5"):
-                api_params["max_completion_tokens"] = 4000
+                # GPT-5 models use reasoning tokens internally, so we need
+                # a much higher limit. 16000 = ~4000 output + 12000 reasoning
+                api_params["max_completion_tokens"] = 16000
             else:
                 api_params["temperature"] = self.temperature
                 api_params["max_tokens"] = 2000
@@ -88,7 +90,9 @@ class BaseAgent:
             return content
 
         except Exception as e:
-            logger.error(f"API call failed for {self.model}: {e}")
+            logger.error(f"API call failed for {self.model}: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
             return None
 
     @property
@@ -114,27 +118,27 @@ class WriterAgent(BaseAgent):
             logger.error(f"Failed to load prompt from {path}: {e}")
             return ""
 
-    def generate(self, product_data: Dict[str, Any], golden_example: Optional[Dict] = None) -> Optional[str]:
+    def generate(self, product_data: Dict[str, Any]) -> Optional[str]:
         """
         Generate draft description.
         
         Args:
             product_data: Dictionary of product attributes.
-            golden_example: Optional dictionary with 'input' (user prompt) and 'output' (ideal response) for few-shot.
+        
+        Examples are provided directly in the system prompt (few-shot style).
         """
-        # Format the user prompt
-        user_prompt = self.task_template.format(**product_data)
+        # Format the user prompt with error handling for missing keys
+        try:
+            user_prompt = self.task_template.format(**product_data)
+        except KeyError as e:
+            logger.error(f"Missing key in product_data for prompt template: {e}")
+            logger.error(f"Available keys: {list(product_data.keys())}")
+            return None
         
         messages = [
-            {"role": "system", "content": self.system_prompt}
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
-        
-        # Inject Golden Example if available (Few-Shot)
-        if golden_example:
-            messages.append({"role": "user", "content": golden_example['input']})
-            messages.append({"role": "assistant", "content": golden_example['output']})
-            
-        messages.append({"role": "user", "content": user_prompt})
         
         return self._call_api(messages, response_format={"type": "json_object"})
 
